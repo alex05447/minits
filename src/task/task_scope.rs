@@ -11,7 +11,7 @@ pub struct TaskScope<'scope, 'task_system> {
 
 impl<'scope, 'task_system> TaskScope<'scope, 'task_system> {
     /// Adds a new task closure to the task system.
-    /// The closure takes a single `TaskSystem` parameter and returns no values.
+    /// The closure takes a single `&TaskSystem` parameter and returns no values.
     /// The task may run immediately and is guaranteed to finish when this `TaskScope` goes out of scope.
     pub fn task<F>(&mut self, f: F)
     where
@@ -30,6 +30,7 @@ impl<'scope, 'task_system> TaskScope<'scope, 'task_system> {
     /// Adds a new task closure to the task system.
     /// The closure takes a single `&TaskSystem` parameter and returns no values.
     /// The task may run immediately and is guaranteed to finish when this `TaskScope` goes out of scope.
+    ///
     /// `task_name` may be retrieved by [`TaskSystem::task_name`] within the task closure.
     /// Requires "task_names" feature.
     ///
@@ -84,6 +85,7 @@ impl<'scope, 'task_system> TaskScope<'scope, 'task_system> {
     /// The closure takes a `std::ops::Range`, a `&TaskSystem` and returns no values.
     /// The closure must be clonable.
     /// The task may run immediately and is guaranteed to finish when this `TaskScope` goes out of scope.
+    ///
     /// `task_name` may be retrieved by [`TaskSystem::task_name`] within the task closure.
     /// Requires "task_names" feature.
     ///

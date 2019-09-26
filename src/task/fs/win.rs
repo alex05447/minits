@@ -40,6 +40,7 @@ impl IOHandle {
     }
 }
 
+/// See [`std::fs::File`](https://doc.rust-lang.org/std/fs/struct.File.html).
 pub struct File<'task_system> {
     file: fs::File,
     task_system: &'task_system TaskSystem,
@@ -49,7 +50,7 @@ pub struct File<'task_system> {
 }
 
 impl<'task_system> File<'task_system> {
-    /// See [`open`](https://doc.rust-lang.org/std/fs/struct.File.html#method.open).
+    /// See [`std::fs::File::open`](https://doc.rust-lang.org/std/fs/struct.File.html#method.open).
     pub fn open<P: AsRef<Path>>(
         task_system: &'task_system TaskSystem,
         path: P,
@@ -57,7 +58,7 @@ impl<'task_system> File<'task_system> {
         OpenOptions::new().read(true).open(task_system, path)
     }
 
-    /// See [`create`](https://doc.rust-lang.org/std/fs/struct.File.html#method.create).
+    /// See [`std::fs::File::create`](https://doc.rust-lang.org/std/fs/struct.File.html#method.create).
     pub fn create<P: AsRef<Path>>(
         task_system: &'task_system TaskSystem,
         path: P,
@@ -69,15 +70,23 @@ impl<'task_system> File<'task_system> {
             .open(task_system, path)
     }
 
-    /// See [`metadata`](https://doc.rust-lang.org/std/fs/struct.File.html#method.metadata).
+    /// See [`std::fs::File::metadata`](https://doc.rust-lang.org/std/fs/struct.File.html#method.metadata).
     pub fn metadata(&self) -> io::Result<fs::Metadata> {
         self.file.metadata()
     }
 
+    /// See [`std::fs::File`](https://doc.rust-lang.org/std/fs/struct.File.html),
+    /// [`std::fs::File::write`](https://doc.rust-lang.org/std/io/trait.Write.html#tymethod.write).
+    ///
+    /// Write the whole `buf` to the file at offset `0`.
     pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
         self.write_at(buf, 0)
     }
 
+    /// See [`std::fs::File`](https://doc.rust-lang.org/std/fs/struct.File.html),
+    /// [`std::fs::File::write`](https://doc.rust-lang.org/std/io/trait.Write.html#tymethod.write).
+    ///
+    /// Write the whole `buf` to the file at `offset`.
     pub fn write_at(&self, buf: &[u8], offset: u64) -> io::Result<usize> {
         let mut io_handle = IOHandle::new();
 
@@ -143,10 +152,18 @@ impl<'task_system> File<'task_system> {
         }
     }
 
+    /// See [`std::fs::File`](https://doc.rust-lang.org/std/fs/struct.File.html),
+    /// [`std::fs::File::read`](https://doc.rust-lang.org/std/io/trait.Write.html#tymethod.read).
+    ///
+    /// Read the whole contents of the file to a Vec of bytes.
     pub fn read_all(&self) -> io::Result<Vec<u8>> {
         self.read_all_at(0)
     }
 
+    /// See [`std::fs::File`](https://doc.rust-lang.org/std/fs/struct.File.html),
+    /// [`std::fs::File::read`](https://doc.rust-lang.org/std/io/trait.Write.html#tymethod.read).
+    ///
+    /// Read the whole contents of the file past `offset` to a Vec of bytes.
     pub fn read_all_at(&self, offset: u64) -> io::Result<Vec<u8>> {
         let file_size = self.file.metadata().map(|m| m.len() as usize).unwrap_or(0);
 
@@ -165,10 +182,18 @@ impl<'task_system> File<'task_system> {
         })
     }
 
+    /// See [`std::fs::File`](https://doc.rust-lang.org/std/fs/struct.File.html),
+    /// [`std::fs::File::read`](https://doc.rust-lang.org/std/io/trait.Write.html#tymethod.read).
+    ///
+    /// Read `buf.len()` bytes from the file at offset `0`.
     pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.read_at(buf, 0)
     }
 
+    /// See [`std::fs::File`](https://doc.rust-lang.org/std/fs/struct.File.html),
+    /// [`std::fs::File::read`](https://doc.rust-lang.org/std/io/trait.Write.html#tymethod.read).
+    ///
+    /// Read `buf.len()` bytes from the file at `offset`.
     pub fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
         let mut io_handle = IOHandle::new();
 
@@ -312,7 +337,7 @@ impl<'task_system> File<'task_system> {
     }
 }
 
-/// See [`OpenOptions`](https://doc.rust-lang.org/std/fs/struct.OpenOptions.html).
+/// See [`std::fs::OpenOptions`](https://doc.rust-lang.org/std/fs/struct.OpenOptions.html).
 pub struct OpenOptions(fs::OpenOptions);
 
 impl OpenOptions {

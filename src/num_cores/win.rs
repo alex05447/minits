@@ -7,6 +7,7 @@ use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::sysinfoapi::{GetLogicalProcessorInformation, GetSystemInfo, SYSTEM_INFO};
 use winapi::um::winnt::{RelationProcessorCore, SYSTEM_LOGICAL_PROCESSOR_INFORMATION};
 
+/// Returns the number of system's logical processors.
 pub fn get_num_logical_cores() -> usize {
     static mut NUM_LOGICAL_CORES: usize = 1;
     static INIT_NUM_LOGICAL_CORES: Once = Once::new();
@@ -20,6 +21,7 @@ pub fn get_num_logical_cores() -> usize {
     }
 }
 
+/// Returns the number of system's physical processors.
 pub fn get_num_physical_cores() -> usize {
     static mut NUM_PHYSICAL_CORES: usize = 1;
     static INIT_NUM_PHYSICAL_CORES: Once = Once::new();
