@@ -4,6 +4,8 @@ A minimalistic task (a.k.a job) system written in Rust.
 
 Created as a learning project by someone who doesn't speak Rust. No guarantees with regards to safety. Bugs, undefined behaviour and unidiomatic code abound.
 
+Not the first project inspired by the excellent [`Parallelizing the Naughty Dog engine using fibers`](http://twvideo01.ubm-us.net/o1/vault/gdc2015/presentations/Gyrling_Christian_Parallelizing_The_Naughty.pdf) talk by Naughty Dog's Christian Gyrling (also see the [`talk video`](https://www.gdcvault.com/play/1022186/Parallelizing-the-Naughty-Dog-Engine)).
+
 ## Building
 
 Windows only.
@@ -251,7 +253,7 @@ Most of these are just for debugging:
 
 - "profiling" - enables the `Profiler` trait and the `TaskSystemParams::set_profiler()` method to allow installing a profiler trait object. Useful for debugging. Works with "task_names". See the documentation for `Profiler` for more info.
 
-- "remotery" - requires "profiler". Provides an implementation of the `Profiler` trait for the `remotery` profiler (wrapped via `miniremotery`); used by `TaskSystemParams::default()`. See the documentation for more info.
+- "remotery" - requires "profiling". Provides an implementation of the `Profiler` trait for the `remotery` profiler (wrapped via `miniremotery`); used by `TaskSystemParams::default()`. See the documentation for more info.
 
 Actual features:
 
