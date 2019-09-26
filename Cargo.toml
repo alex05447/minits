@@ -1,0 +1,44 @@
+[package]
+name = "minits"
+version = "0.1.0"
+authors = ["N/A <N/A>"]
+edition = "2018"
+
+[lib]
+name = "minits"
+
+[features]
+default = []
+tracing = ["log"]
+task_names = []
+profiling = []
+remotery = ["miniremotery"]
+asyncio = ["miniiocp"]
+
+[dependencies]
+static_assertions = "0.3"
+
+log = { version = "0.4", optional = true }
+
+minievent = { path = "../minievent" }
+minifiber = { path = "../minifiber" }
+minithreadlocal = { path = "../minithreadlocal" }
+miniremotery = { path = "../miniremotery", optional = true }
+miniiocp = { path = "../miniiocp", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = [    "std"
+                                            ,"impl-default"
+                                            ,"minwindef"
+                                            ,"winbase"
+                                            ,"synchapi"
+                                            ,"winerror"
+                                            ,"handleapi"
+                                            ,"fibersapi"
+                                            ,"processthreadsapi"
+                                            ,"errhandlingapi"
+                                            ,"sysinfoapi"
+                                            ,"ioapiset"] }
+
+[dev-dependencies]
+env_logger = "0.6"
