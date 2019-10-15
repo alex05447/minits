@@ -16,10 +16,9 @@ remotery = ["miniremotery"]
 asyncio = ["miniiocp"]
 
 [dependencies]
-static_assertions = "0.3"
-
 log = { version = "0.4", optional = true }
 
+miniclosure = { path = "../miniclosure" }
 minievent = { path = "../minievent" }
 minifiber = { path = "../minifiber" }
 minithreadlocal = { path = "../minithreadlocal" }

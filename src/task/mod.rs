@@ -2,7 +2,6 @@ mod task_handle;
 
 pub use task_handle::TaskHandle;
 
-mod closure_holder;
 mod fiber_pool;
 mod reference_holder;
 mod task_context;

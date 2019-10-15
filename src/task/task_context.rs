@@ -1,7 +1,8 @@
-use super::closure_holder::ClosureHolder;
 use super::reference_holder::ReferenceHolder;
 use super::task_handle::TaskHandle;
 use super::task_system::TaskSystem;
+
+use miniclosure::ClosureHolder;
 
 pub(super) struct TaskContext {
     /// Stores the user closure associated with this task.

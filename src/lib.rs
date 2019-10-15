@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate static_assertions;
-
 #[cfg(feature = "tracing")]
 #[macro_use]
 extern crate log;
