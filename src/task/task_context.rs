@@ -32,7 +32,7 @@ impl TaskContext {
         F: FnOnce(&TaskSystem) + 'any,
     {
         TaskContext {
-            closure: ClosureHolder::new(f),
+            closure: ClosureHolder::once(f),
             task_handle: ReferenceHolder::from_ref(h),
             is_main_task: false,
 
@@ -48,7 +48,7 @@ impl TaskContext {
     /// Panics if the closure holder is empty.
     pub(super) unsafe fn execute<'any>(&mut self, task_system: &'any TaskSystem) {
         debug_assert!(self.closure.is_some());
-        self.closure.execute(task_system);
+        self.closure.execute_once(task_system);
     }
 
     /// Returns `true` if this was the last task associated with its handle
