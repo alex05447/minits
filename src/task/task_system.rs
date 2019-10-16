@@ -420,7 +420,7 @@ impl TaskSystem {
     }
 
     fn on_task_added(&self, task: &TaskContext) {
-        debug_assert!(task.closure.is_some());
+        debug_assert!(task.closure.is_once());
         debug_assert!(!task.task_handle.is_empty());
 
         #[cfg(feature = "tracing")]

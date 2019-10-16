@@ -47,7 +47,7 @@ impl TaskContext {
     /// Executes the task's user closure.
     /// Panics if the closure holder is empty.
     pub(super) unsafe fn execute<'any>(&mut self, task_system: &'any TaskSystem) {
-        debug_assert!(self.closure.is_some());
+        debug_assert!(self.closure.is_once());
         self.closure.execute_once(task_system);
     }
 
