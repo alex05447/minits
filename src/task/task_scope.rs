@@ -15,7 +15,7 @@ impl<'scope, 'task_system> TaskScope<'scope, 'task_system> {
     /// The task may run immediately and is guaranteed to finish when this `TaskScope` goes out of scope.
     pub fn task<F>(&mut self, f: F)
     where
-        F: FnOnce(&TaskSystem) + 'scope,
+        F: FnOnce(&TaskSystem) + Send + 'scope,
     {
         unsafe {
             if let Some(scope_name) = self.name() {
@@ -37,7 +37,7 @@ impl<'scope, 'task_system> TaskScope<'scope, 'task_system> {
     /// [`TaskSystem::task_name`]: task_system/struct.TaskSystem.html#method.task_name
     pub fn task_named<F>(&mut self, task_name: &str, f: F)
     where
-        F: FnOnce(&TaskSystem) + 'scope,
+        F: FnOnce(&TaskSystem) + Send + 'scope,
     {
         unsafe {
             if let Some(scope_name) = self.name() {
@@ -61,7 +61,7 @@ impl<'scope, 'task_system> TaskScope<'scope, 'task_system> {
     /// Panics if `range` is empty.
     pub fn task_range<F>(&mut self, range: TaskRange, multiplier: u32, f: F)
     where
-        F: FnMut(TaskRange, &TaskSystem) + Clone + 'scope,
+        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         unsafe {
             if let Some(scope_name) = self.name() {
@@ -96,7 +96,7 @@ impl<'scope, 'task_system> TaskScope<'scope, 'task_system> {
     /// [`TaskSystem::task_name`]: task_system/struct.TaskSystem.html#method.task_name
     pub fn task_range_named<F>(&mut self, task_name: &str, range: TaskRange, multiplier: u32, f: F)
     where
-        F: FnMut(TaskRange, &TaskSystem) + Clone + 'scope,
+        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         unsafe {
             if let Some(scope_name) = self.name() {

@@ -300,14 +300,14 @@ impl TaskSystem {
 
     pub(crate) unsafe fn task<'scope, F>(&self, h: &'scope TaskHandle, f: F)
     where
-        F: FnOnce(&TaskSystem) + 'scope,
+        F: FnOnce(&TaskSystem) + Send + 'scope,
     {
         self.task_internal(None, None, h, f);
     }
 
     pub(crate) unsafe fn task_named<'scope, F>(&self, task_name: &str, h: &'scope TaskHandle, f: F)
     where
-        F: FnOnce(&TaskSystem) + 'scope,
+        F: FnOnce(&TaskSystem) + Send + 'scope,
     {
         self.task_internal(Some(task_name), None, h, f);
     }
@@ -318,7 +318,7 @@ impl TaskSystem {
         h: &'scope TaskHandle,
         f: F,
     ) where
-        F: FnOnce(&TaskSystem) + 'scope,
+        F: FnOnce(&TaskSystem) + Send + 'scope,
     {
         self.task_internal(None, Some(scope_name), h, f);
     }
@@ -330,7 +330,7 @@ impl TaskSystem {
         h: &'scope TaskHandle,
         f: F,
     ) where
-        F: FnOnce(&TaskSystem) + 'scope,
+        F: FnOnce(&TaskSystem) + Send + 'scope,
     {
         self.task_internal(Some(task_name), Some(scope_name), h, f);
     }
@@ -342,7 +342,7 @@ impl TaskSystem {
         multiplier: u32,
         f: F,
     ) where
-        F: FnMut(TaskRange, &TaskSystem) + Clone + 'scope,
+        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         self.task_range_internal(None, None, h, range, multiplier, f);
     }
@@ -355,7 +355,7 @@ impl TaskSystem {
         multiplier: u32,
         f: F,
     ) where
-        F: FnMut(TaskRange, &TaskSystem) + Clone + 'scope,
+        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         self.task_range_internal(Some(task_name), None, h, range, multiplier, f);
     }
@@ -368,7 +368,7 @@ impl TaskSystem {
         multiplier: u32,
         f: F,
     ) where
-        F: FnMut(TaskRange, &TaskSystem) + Clone + 'scope,
+        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         self.task_range_internal(None, Some(scope_name), h, range, multiplier, f);
     }
@@ -382,7 +382,7 @@ impl TaskSystem {
         multiplier: u32,
         f: F,
     ) where
-        F: FnMut(TaskRange, &TaskSystem) + Clone + 'scope,
+        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         self.task_range_internal(Some(task_name), Some(scope_name), h, range, multiplier, f);
     }
@@ -406,7 +406,7 @@ impl TaskSystem {
         h: &'scope TaskHandle,
         f: F,
     ) where
-        F: FnOnce(&TaskSystem) + 'scope,
+        F: FnOnce(&TaskSystem) + Send + 'scope,
     {
         // Increment the task counters.
         self.global_task_handle.inc();
@@ -459,7 +459,7 @@ impl TaskSystem {
         multiplier: u32,
         f: F,
     ) where
-        F: FnMut(TaskRange, &TaskSystem) + Clone + 'scope,
+        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         assert!(range.end > range.start, "Expected a non-empty task range.");
 
@@ -508,7 +508,7 @@ impl TaskSystem {
         f: F,
         inline: bool,
     ) where
-        F: FnMut(TaskRange, &TaskSystem) + Clone + 'scope,
+        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         debug_assert!(range.end > range.start, "Expected a non-empty task range.");
 
@@ -620,7 +620,7 @@ impl TaskSystem {
         f: F,
         inline: bool,
     ) where
-        F: FnMut(TaskRange, &TaskSystem) + Clone + 'scope,
+        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         let mut f = f;
 
