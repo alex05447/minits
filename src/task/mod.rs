@@ -17,7 +17,7 @@ pub mod task_system;
 pub mod task_system_singleton;
 
 pub use task_scope::TaskScope;
-pub use task_system::{TaskSystem, TaskSystemParams};
+pub use task_system::{TaskSystem, TaskSystemBuilder};
 pub use task_system_singleton::{
     fini_task_system, handle, init_task_system, scope, scope_named, task_system,
 };

@@ -32,29 +32,16 @@ fn main() {
     #[cfg(feature = "tracing")]
     setup_logger();
 
-    let num_cores = minits::get_num_physical_cores().max(1);
-    //minits::get_num_logical_cores().max(1);
+    let num_cores =
+        minits::get_num_physical_cores().max(1);
+    //  minits::get_num_logical_cores().max(1);
 
     let num_worker_threads = num_cores - 1;
 
-    #[allow(unused_mut)]
-    let mut params =
-        minits::TaskSystemParams::new(num_worker_threads, num_cores * 4, true, 1024 * 1024);
+    let builder = minits::TaskSystemBuilder::new()
+        .num_worker_threads(num_worker_threads);
 
-    #[cfg(feature = "profiling")]
-    {
-        #[cfg(feature = "remotery")]
-        {
-            if let Some(profiler) = minits::RemoteryProfiler::new() {
-                let profiler: Box<minits::TaskSystemProfiler> = Box::new(profiler);
-                params.set_profiler(profiler);
-            }
-        }
-    }
-
-    //let params = minits::TaskSystemParams::default();
-
-    minits::init_task_system(params);
+    minits::init_task_system(builder);
 
     let range = 0..500_000;
 

@@ -16,7 +16,7 @@ extern crate log;
 #[cfg(feature = "tracing")]
 extern crate env_logger;
 
-use minits::TaskSystem;
+use minits::{TaskSystem, TaskSystemBuilder};
 
 #[cfg(feature = "tracing")]
 fn setup_logger_internal() {
@@ -40,9 +40,12 @@ fn setup_logger() {
 fn setup(num_worker_threads: usize, num_fibers: usize) -> Box<TaskSystem> {
     setup_logger();
 
-    let params = minits::TaskSystemParams::new(num_worker_threads, num_fibers, true, 1024 * 1024);
-
-    TaskSystem::new(params)
+    TaskSystemBuilder::new()
+        .num_worker_threads(num_worker_threads)
+        .num_fibers(num_fibers)
+        .allow_inline_tasks(true)
+        .fiber_stack_size(1024 * 1024)
+        .build()
 }
 
 fn setup_default() -> Box<TaskSystem> {
@@ -375,4 +378,50 @@ fn range_task_st() {
     let sum_parallel = sum_parallel.load(Ordering::SeqCst);
 
     assert_eq!(sum_serial, sum_parallel);
+}
+
+#[test]
+fn thread_init_fini() {
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use minithreadlocal::ThreadLocal;
+
+    setup_logger();
+
+    let num_worker_threads = 3;
+    let worker_thread_counter = Arc::new(AtomicUsize::new(0));
+
+    let mut thread_local = ThreadLocal::<usize>::new();
+
+    let worker_thread_counter_clone = worker_thread_counter.clone();
+
+    let thread_init = move |thread_index: usize| {
+        assert!((1 ..= num_worker_threads).contains(&thread_index));
+
+        thread_local.store(thread_index);
+
+        worker_thread_counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    };
+
+    let thread_fini = move |thread_index: usize| {
+        assert!((1 ..= num_worker_threads).contains(&thread_index));
+
+        let thread_local = thread_local.take();
+
+        assert_eq!(thread_local, thread_index);
+    };
+
+    {
+        let _ts = TaskSystemBuilder::new()
+            .num_worker_threads(num_worker_threads)
+            .num_fibers(32)
+            .allow_inline_tasks(true)
+            .fiber_stack_size(1024 * 1024)
+            .thread_init(thread_init)
+            .thread_fini(thread_fini)
+            .build();
+    }
+
+    assert_eq!(worker_thread_counter.load(Ordering::SeqCst), num_worker_threads);
+
+    thread_local.free_index();
 }

@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::task_handle::TaskHandle;
 use super::task_scope::TaskScope;
-use super::task_system::{TaskSystem, TaskSystemParams};
+use super::task_system::{TaskSystem, TaskSystemBuilder};
 
 static mut TASK_SYSTEM: *mut TaskSystem = 0 as *mut _;
 static TASK_SYSTEM_INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -15,12 +15,12 @@ static TASK_SYSTEM_INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// # Panics
 ///
 /// Panics if the task system has already been initialized.
-pub fn init_task_system(params: TaskSystemParams) {
+pub fn init_task_system(builder: TaskSystemBuilder) {
     if TASK_SYSTEM_INITIALIZED.load(Ordering::SeqCst) {
         panic!("Task system already initialized.");
     }
 
-    let task_system = TaskSystem::new(params);
+    let task_system = builder.build();
 
     unsafe {
         TASK_SYSTEM = Box::into_raw(task_system);

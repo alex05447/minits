@@ -11,7 +11,7 @@ mod profiler;
 pub use num_cores::{get_num_logical_cores, get_num_physical_cores};
 pub use task::{
     fini_task_system, handle, init_task_system, scope, scope_named, task_system, TaskHandle,
-    TaskScope, TaskSystem, TaskSystemParams,
+    TaskScope, TaskSystem, TaskSystemBuilder,
 };
 
 #[cfg(feature = "profiling")]

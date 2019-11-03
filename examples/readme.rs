@@ -15,6 +15,8 @@ extern crate env_logger;
 
 use minits;
 
+use minithreadlocal::ThreadLocal;
+
 #[cfg(feature = "tracing")]
 fn setup_logger() {
     static INIT: Once = Once::new();
@@ -36,8 +38,10 @@ fn main() {
     // Default task system parameters:
     // spawn a worker thread per physical core less one,
     // 1 Mb of stack per worker thread/fiber,
-    // 4 fibers per thread.
-    //let params = minits::TaskSystemParams::default();
+    // 4 fibers per thread,
+    // allow inline tasks.
+
+    //let builder = minits::TaskSystemBuilder::new();
 
     // Equivalent to:
 
@@ -47,19 +51,41 @@ fn main() {
     let allow_inline_tasks = true;
     let fiber_stack_size = 1024 * 1024;
 
-    let params = minits::TaskSystemParams::new(
-        num_worker_threads,
-        num_fibers,
-        allow_inline_tasks,
-        fiber_stack_size,
-    );
+    let builder = minits::TaskSystemBuilder::new()
+        .num_worker_threads(num_worker_threads)
+        .num_fibers(num_fibers)
+        .allow_inline_tasks(allow_inline_tasks)
+        .fiber_stack_size(fiber_stack_size);
+
+    // These closures will be called in the spawned worker threads
+    // before the first task is executed / after the last task is executed.
+    // The closures are passed the worker thread index in range `1 ..= num_worker_threads`.
+
+    // E.g. we may initialize some thread-local data.
+    let mut thread_local = ThreadLocal::<usize>::new();
+
+    let thread_init = move |thread_index: usize| {
+        println!("Hi from thread {}!", thread_index);
+
+        thread_local.store(thread_index);
+    };
+
+    let thread_fini = move |thread_index: usize| {
+        println!("Bye from thread {}!", thread_index);
+
+        assert_eq!(thread_local.take(), thread_index);
+    };
+
+    let builder = builder
+        .thread_init(thread_init)
+        .thread_fini(thread_fini);
 
     // Initializes the global task system singleton.
     // Call once before the task system needs to be used,
     // e.g. at application startup.
     // The task system may be used from the thread which
     // called `init_task_system` and from any spawned tasks.
-    minits::init_task_system(params);
+    minits::init_task_system(builder);
 
     {
         // This value will be borrowed by tasks immutably.
@@ -245,4 +271,7 @@ fn main() {
     // Call from the same thread which called `init_task_system` above.
     minits::fini_task_system();
     // Do not use the task system past this point.
+
+    // Don't forget to clean up the `ThreadLocal` object.
+    thread_local.free_index();
 }

@@ -1,7 +1,7 @@
 use std::mem;
 use std::num::NonZeroUsize;
 use std::ops::Range;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::time::Duration;
 
@@ -40,75 +40,29 @@ use miniiocp::{IOCPResult, IOCP};
 #[cfg(feature = "profiling")]
 pub type TaskSystemProfiler = dyn Profiler + Send + Sync;
 
-/// Task system configuration parameters.
-/// Used by [`TaskSystem::new()`] / [`init_task_system()`].
+pub(super) type ThreadInitFiniCallback = dyn Fn(usize) + Send + Sync + 'static;
+
+/// Used to configure the task system.
+/// Creates a task system instance via [`build`].
 ///
-/// [`TaskSystem::new()`]: ../struct.TaskSystem.html#method.new
-/// [`init_task_system()`]: ../task_system_singleton/fn.init_task_system.html
-pub struct TaskSystemParams {
-    /// Number of additional worker threads the task system will spawn.
-    /// Keep in mind that the "main" thread (the thread which called [`TaskSystem::new()`] / [`init_task_system()`])
-    /// also executes tasks.
-    /// `0` is a valid value and means no worker threads will be spawned -
-    /// might be useful when debugging.
-    ///
-    /// [`TaskSystem::new()`]: ../struct.TaskSystem.html#method.new
-    /// [`init_task_system()`]: ../task_system_singleton/fn.init_task_system.html
-    pub num_worker_threads: usize,
+/// Used by [`init_task_system`].
+///
+/// [`build`]: #method.build
+/// [`init_task_system`]: ../task_system_singleton/fn.init_task_system.html
+pub struct TaskSystemBuilder {
+    num_worker_threads: usize,
+    num_fibers: usize,
+    allow_inline_tasks: bool,
+    fiber_stack_size: usize,
 
-    /// Number of fibers the task system will preallocate in the pool.
-    /// Will be at least `num_worker_threads`.
-    /// The fiber pool never grows or shrinks at runtime.
-    /// If `num_fibers` is `0`, the fiber pool is not allocated and
-    /// the task system will execute all tasks inline, on the "main" and worker threads' stacks.
-    pub num_fibers: usize,
-
-    /// Used only if `num_fibers` is positive.
-    /// If `true`, the task system will execute tasks inline on worker thread stack if it runs out of free fibers.
-    /// If `false`, the task system alwais executes tasks in dedicated fibers,
-    /// even if it means waiting for a fiber to become available.
-    pub allow_inline_tasks: bool,
-
-    /// Worker fiber stack size in bytes.
-    /// If `num_fibers` == `0` or `allow_inline_tasks` == `true`,
-    /// this value is used for worker thread stack size instead.
-    pub fiber_stack_size: usize,
+    thread_init: Option<Arc<ThreadInitFiniCallback>>,
+    thread_fini: Option<Arc<ThreadInitFiniCallback>>,
 
     #[cfg(feature = "profiling")]
-    pub profiler: Option<Box<TaskSystemProfiler>>,
+    profiler: Option<Box<TaskSystemProfiler>>,
 }
 
-impl TaskSystemParams {
-    pub fn new(
-        num_worker_threads: usize,
-        num_fibers: usize,
-        allow_inline_tasks: bool,
-        fiber_stack_size: usize,
-    ) -> Self {
-        #[cfg(feature = "profiling")]
-        return Self {
-            num_worker_threads,
-            num_fibers,
-            allow_inline_tasks,
-            fiber_stack_size,
-            profiler: None,
-        };
-        #[cfg(not(feature = "profiling"))]
-        return Self {
-            num_worker_threads,
-            num_fibers,
-            allow_inline_tasks,
-            fiber_stack_size,
-        };
-    }
-
-    #[cfg(feature = "profiling")]
-    pub fn set_profiler(&mut self, profiler: Box<TaskSystemProfiler>) {
-        self.profiler = Some(profiler);
-    }
-}
-
-impl Default for TaskSystemParams {
+impl TaskSystemBuilder {
     fn default() -> Self {
         let num_physical_cores = num_cores::get_num_physical_cores().max(1);
 
@@ -117,26 +71,168 @@ impl Default for TaskSystemParams {
         let allow_inline_tasks = true;
         let fiber_stack_size = 1024 * 1024; // 1 Mb
 
-        #[allow(unused_mut)]
-        let mut result = TaskSystemParams::new(
-            num_worker_threads,
-            num_fibers,
-            allow_inline_tasks,
-            fiber_stack_size,
-        );
+        #[cfg(feature = "profiling")] {
+            Self {
+                num_worker_threads,
+                num_fibers,
+                allow_inline_tasks,
+                fiber_stack_size,
+                thread_init: None,
+                thread_fini: None,
+                profiler: None,
+            }
+        }
 
-        #[cfg(feature = "profiling")]
-        {
-            #[cfg(feature = "remotery")]
-            {
+        #[cfg(not(feature = "profiling"))] {
+            Self {
+                num_worker_threads,
+                num_fibers,
+                allow_inline_tasks,
+                fiber_stack_size,
+                thread_init: None,
+                thread_fini: None,
+            }
+        }
+    }
+
+    /// Creates a new [`TaskSystemBuilder`] with default settings:
+    ///
+    /// spawn a worker thread per physical core less one,
+    /// 1 Mb of stack per worker thread/fiber,
+    /// 4 fibers per thread,
+    /// allow inline tasks.
+    ///
+    /// [`TaskSystemBuilder`]: struct.TaskSystemBuilder.html
+    pub fn new() -> Self {
+        let builder = TaskSystemBuilder::default();
+
+        #[cfg(feature = "profiling")] {
+            #[cfg(feature = "remotery")] {
                 if let Some(profiler) = RemoteryProfiler::new() {
                     let profiler: Box<TaskSystemProfiler> = Box::new(profiler);
-                    result.set_profiler(profiler);
+
+                    builder.profiler = Some(profiler);
                 }
             }
         }
 
-        result
+        builder
+    }
+
+    /// Set the number of additional worker threads the task system will spawn.
+    ///
+    /// Keep in mind that the "main" thread (the thread which called [`TaskSystemBuilder::build()`] / [`init_task_system()`])
+    /// also executes tasks.
+    ///
+    /// `0` is a valid value and means no worker threads will be spawned -
+    /// might be useful when debugging.
+    ///
+    /// [`TaskSystemBuilder::build()`]: struct.TaskSystemBuilder.html#method.build
+    /// [`init_task_system()`]: ../task_system_singleton/fn.init_task_system.html
+    pub fn num_worker_threads(mut self, num_worker_threads: usize) -> Self {
+        self.num_worker_threads = num_worker_threads;
+        self
+    }
+
+    /// Number of fibers the task system will preallocate in the pool.
+    ///
+    /// Will be at least `num_worker_threads`.
+    /// The fiber pool never grows or shrinks at runtime.
+    ///
+    /// If `num_fibers` is `0`, the fiber pool is not allocated and
+    /// the task system will execute all tasks inline, on the "main" and worker threads' stacks.
+    pub fn num_fibers(mut self, num_fibers: usize) -> Self {
+        self.num_fibers = num_fibers;
+        self
+    }
+
+    /// Used only if `num_fibers` is positive.
+    /// If `true`, the task system will execute tasks inline on worker thread stack if it runs out of free fibers.
+    /// If `false`, the task system alwais executes tasks in dedicated fibers,
+    /// even if it means waiting for a fiber to become available.
+    pub fn allow_inline_tasks(mut self, allow_inline_tasks: bool) -> Self {
+        self.allow_inline_tasks = allow_inline_tasks;
+        self
+    }
+
+    /// Worker fiber stack size in bytes.
+    /// If `num_fibers` == `0` or `allow_inline_tasks` == `true`,
+    /// this value is used for worker thread stack size instead.
+    pub fn fiber_stack_size(mut self, fiber_stack_size: usize) -> Self {
+        self.fiber_stack_size = fiber_stack_size;
+        self
+    }
+
+    /// A closure to be called in the context of each worker thread spawned by the task system
+    /// before any tasks are executed by it.
+    ///
+    /// The closure is passed the worker thread index in range `1 ..= num_worker_threads`.
+    ///
+    /// NOTE - not called in the `main` thread.
+    pub fn thread_init<F: Fn(usize) + Send + Sync + 'static>(mut self, thread_init: F) -> Self {
+        self.thread_init = Some(Arc::new(thread_init));
+        self
+    }
+
+    /// A closure to be called in the context of each worker thread spawned by the task system
+    /// before the thread exits on task system shutdown.
+    ///
+    /// The closure is passed the worker thread index in range `1 ..= num_worker_threads`.
+    ///
+    /// NOTE - not called in the `main` thread.
+    pub fn thread_fini<F: Fn(usize) + Send + Sync + 'static>(mut self, thread_fini: F) -> Self {
+        self.thread_fini = Some(Arc::new(thread_fini));
+        self
+    }
+
+    #[cfg(feature = "profiling")]
+    pub fn profiler(mut self, profiler: Box<TaskSystemProfiler>) -> Self {
+        self.profiler = Some(profiler);
+        self
+    }
+
+    /// Allocates and returns a new task system instance, configured by the builder.
+    pub fn build(self) -> Box<TaskSystem> {
+        let num_worker_threads = self.num_worker_threads;
+        let task_wait_timeout = TASK_WAIT_TIMEOUT;
+
+        let mut task_system = Box::new(TaskSystem::empty(num_worker_threads, task_wait_timeout));
+
+        let num_fibers = self.num_fibers;
+        let stack_size = self.fiber_stack_size;
+
+        // Skip fiber pool initialization if we're not using fibers.
+        if num_fibers > 0 {
+            let num_fibers = num_fibers + num_worker_threads;
+            task_system.init_fiber_pool(num_fibers, stack_size);
+        }
+
+        // If we use fibers, worker threads only need a small stack.
+        // Otherwise tasks will be executed on the worker threads' stacks
+        // (and the "main" thread stack - but we have no control over that)
+        // and we need to respect the user-provided stack size.
+        let need_large_worker_thread_stack = num_fibers == 0;
+        let worker_stack_size = if need_large_worker_thread_stack {
+            stack_size
+        } else {
+            SCHEDULER_STACK_SIZE
+        };
+
+        task_system.create_worker_threads(num_worker_threads, worker_stack_size, self.thread_init, self.thread_fini);
+
+        #[cfg(feature = "asyncio")]
+        task_system.create_fs_thread(SCHEDULER_STACK_SIZE);
+
+        let main_thread_name = "Main thread";
+
+        #[cfg(feature = "profiling")]
+        task_system.init_profiler(self.profiler, main_thread_name);
+
+        task_system.init_main_thread(main_thread_name);
+
+        task_system.start_threads();
+
+        task_system
     }
 }
 
@@ -204,50 +300,6 @@ enum FiberToSwitchTo {
 }
 
 impl TaskSystem {
-    /// Allocates and returns a new task system instance, configured by `params`.
-    pub fn new(params: TaskSystemParams) -> Box<TaskSystem> {
-        let num_worker_threads = params.num_worker_threads;
-        let task_wait_timeout = TASK_WAIT_TIMEOUT;
-
-        let mut task_system = Box::new(TaskSystem::empty(num_worker_threads, task_wait_timeout));
-
-        let num_fibers = params.num_fibers;
-        let stack_size = params.fiber_stack_size;
-
-        // Skip fiber pool initialization if we're not using fibers.
-        if num_fibers > 0 {
-            let num_fibers = num_fibers + num_worker_threads;
-            task_system.init_fiber_pool(num_fibers, stack_size);
-        }
-
-        // If we use fibers, worker threads only need a small stack.
-        // Otherwise tasks will be executed on the worker threads' stacks
-        // (and the "main" thread stack - but we have no control over that)
-        // and we need to respect the user-provided stack size.
-        let need_large_worker_thread_stack = num_fibers == 0;
-        let worker_stack_size = if need_large_worker_thread_stack {
-            stack_size
-        } else {
-            SCHEDULER_STACK_SIZE
-        };
-
-        task_system.create_worker_threads(num_worker_threads, worker_stack_size);
-
-        #[cfg(feature = "asyncio")]
-        task_system.create_fs_thread(SCHEDULER_STACK_SIZE);
-
-        let main_thread_name = "Main thread";
-
-        #[cfg(feature = "profiling")]
-        task_system.init_profiler(params.profiler, main_thread_name);
-
-        task_system.init_main_thread(main_thread_name);
-
-        task_system.start_threads();
-
-        task_system
-    }
-
     /// Creates a new [`TaskHandle`] for use with a [`TaskScope`].
     ///
     /// [`TaskHandle`]: struct.TaskHandle.html
@@ -296,6 +348,14 @@ impl TaskSystem {
     /// Requires "task_names" feature.
     pub fn scope_name(&self) -> Option<&str> {
         self.thread_context.as_ref().scope_name()
+    }
+
+    /// Returns the index of the task system thread in which this function is called.
+    ///
+    /// `0` means `main thread`,
+    /// value in range `1 ..= num_worker_threads` means one of the worker threads.
+    pub fn thread_index(&self) -> usize {
+        self.thread_context.as_ref().thread_index()
     }
 
     pub(crate) unsafe fn task<'scope, F>(&self, h: &'scope TaskHandle, f: F)
@@ -814,11 +874,20 @@ impl TaskSystem {
     /// Run once at startup.
     /// Creates `num_worker_threads` thread pool worker threads.
     /// NOTE - `self` must be allocated on the heap
-    fn create_worker_threads(&mut self, num_worker_threads: usize, stack_size: usize) {
+    fn create_worker_threads(
+        &mut self,
+        num_worker_threads: usize,
+        stack_size: usize,
+        thread_init: Option<Arc<ThreadInitFiniCallback>>,
+        thread_fini: Option<Arc<ThreadInitFiniCallback>>,
+    ) {
         let task_system = unsafe { ReferenceHolder::from_ref(&*self) };
 
-        for i in 0..num_worker_threads {
+        for i in 0 .. num_worker_threads {
             let task_system = task_system.clone();
+
+            let thread_init = thread_init.clone();
+            let thread_fini = thread_fini.clone();
 
             self.worker_threads.push(
                 thread::Builder::new()
@@ -826,7 +895,7 @@ impl TaskSystem {
                     .name(format!("Worker thread {}", i))
                     .spawn(move || {
                         let task_system = unsafe { task_system.as_ref() };
-                        task_system.worker_entry_point(i);
+                        task_system.worker_entry_point(i, thread_init, thread_fini);
                     })
                     .expect("Worker thread creation failed."),
             );
@@ -865,7 +934,7 @@ impl TaskSystem {
     /// Initializes the "main" thread context, converting the main thread to a fiber if necessary.
     /// NOTE - `self` must be allocated on the heap
     fn init_main_thread(&self, main_thread_name: &str) {
-        let mut thread_context = ThreadContext::new(Some(main_thread_name), true);
+        let mut thread_context = ThreadContext::new(Some(main_thread_name), 0, None);
 
         // No need to convert to a fiber if we're not using fibers.
         if self.use_fiber_pool {
@@ -903,10 +972,19 @@ impl TaskSystem {
     // initialize their thread-local contexts,
     // optionally convert themselves to fibers
     // and run the scheduler loop.
-    fn worker_entry_point(&self, index: usize) {
+    fn worker_entry_point(
+        &self,
+        index: usize,
+        thread_init: Option<Arc<ThreadInitFiniCallback>>,
+        thread_fini: Option<Arc<ThreadInitFiniCallback>>,
+    ) {
         self.wait_for_thread_start();
 
-        self.init_worker_thread_context(index);
+        if let Some(thread_init) = thread_init {
+            thread_init(index + 1);
+        }
+
+        self.init_worker_thread_context(index, thread_fini);
 
         // If we're using fibers, get and switch to a new worker fiber.
         if self.use_fiber_pool {
@@ -932,10 +1010,10 @@ impl TaskSystem {
     }
 
     /// Called at worker thread startup.
-    fn init_worker_thread_context(&self, index: usize) {
+    fn init_worker_thread_context(&self, index: usize, thread_fini: Option<Arc<ThreadInitFiniCallback>>) {
         let thread_name = format!("Worker thread {}", index);
 
-        let mut thread_context = ThreadContext::new(Some(&thread_name), false);
+        let mut thread_context = ThreadContext::new(Some(&thread_name), index + 1, thread_fini);
 
         // Don't convert to a scheduler fiber if we're not using fibers.
         if self.use_fiber_pool {
@@ -957,7 +1035,10 @@ impl TaskSystem {
 
     /// Called before thread exit.
     fn fini_worker_thread_context(&self) {
-        let thread_context = self.thread_context.take();
+        let mut thread_context = self.thread_context.take();
+
+        thread_context.execute_thread_fini();
+
         mem::drop(thread_context);
     }
 
@@ -1449,7 +1530,7 @@ impl TaskSystem {
     fn init_fs_thread_context(&self) {
         let thread_name = "FS thread";
 
-        let thread_context = ThreadContext::new(Some(&thread_name), false);
+        let thread_context = ThreadContext::new(Some(&thread_name), 1, None); // `1` because any value other than `0` (`main thread`) is fine here.
 
         self.thread_context.store(thread_context);
 

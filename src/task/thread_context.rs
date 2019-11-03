@@ -1,18 +1,20 @@
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use super::task_context::TaskContext;
 use super::task_handle::TaskHandle;
-use super::task_system::TaskSystem;
+use super::task_system::{TaskSystem, ThreadInitFiniCallback};
 
 use minifiber::Fiber;
 
 /// Per-thread task system state.
 /// Intended to be thread-local.
 pub(super) struct ThreadContext {
-    // Is this thread the "main" thread - the owner of the `TaskSystem`
-    // and its spawned threads.
-    // Initiated on thread startup.
-    is_main_thread: bool,
+    // `Main` thread - `0`.
+    // Worker threads - `1 ..= num_worker_threads`.
+    thread_index: usize,
+
+    thread_fini: Option<Arc<ThreadInitFiniCallback>>,
 
     // If we're using fibers, it's important to switch back to the fiber
     // created from the worker thread before the thread exits
@@ -38,9 +40,15 @@ pub(super) struct ThreadContext {
 }
 
 impl ThreadContext {
-    pub(super) fn new(_thread_name: Option<&str>, is_main_thread: bool) -> Self {
+    pub(super) fn new(
+        _thread_name: Option<&str>,
+        thread_index: usize,
+        thread_fini: Option<Arc<ThreadInitFiniCallback>>,
+    ) -> Self {
         Self {
-            is_main_thread,
+            thread_index,
+            thread_fini,
+
             thread_fiber: None,
 
             #[cfg(feature = "tracing")]
@@ -77,8 +85,12 @@ impl ThreadContext {
             .switch_to();
     }
 
+    pub(super) fn thread_index(&self) -> usize {
+        self.thread_index
+    }
+
     pub(super) fn is_main_thread(&self) -> bool {
-        self.is_main_thread
+        self.thread_index == 0
     }
 
     #[cfg(feature = "tracing")]
@@ -201,4 +213,10 @@ impl ThreadContext {
             self.current_fiber.as_ref().unwrap().name()
         }
     */
+
+    pub(super) fn execute_thread_fini(&mut self) {
+        if let Some(thread_fini) = self.thread_fini.take() {
+            thread_fini(self.thread_index);
+        }
+    }
 }
