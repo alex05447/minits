@@ -1,5 +1,5 @@
 use minits;
-use minigraph::{Graph, SystemDesc, build_system_graph};
+use minigraph::{TaskGraph, SystemDesc, build_system_graph};
 
 #[cfg(feature = "tracing")]
 use std::{io::Write, sync::Once};
@@ -44,11 +44,7 @@ fn main() {
         SystemDesc::new(SystemID(6), &[ResourceID(2)], &[ResourceID(1)]),
     ];
 
-    let graph: Graph::<usize, _> = build_system_graph(&systems).unwrap();
-    assert_eq!(graph.num_roots(), 3);
-    assert_eq!(graph.num_leaves(), 2);
-
-    let task_graph = graph.task_graph();
+    let task_graph: TaskGraph::<usize, _> = build_system_graph(&systems).unwrap();
 
     let builder = minits::TaskSystemBuilder::new()
         //.num_worker_threads(0)

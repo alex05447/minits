@@ -418,7 +418,7 @@ impl TaskSystem {
 
         f(task_vertex.vertex());
 
-        for (vertex_id, task_vertex) in graph.dependencies(vertex_id) {
+        for (vertex_id, task_vertex) in graph.dependencies(vertex_id).unwrap() {
             let f = f.clone();
 
             unsafe {
