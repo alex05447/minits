@@ -14,6 +14,7 @@ task_names = []
 profiling = []
 remotery = ["miniremotery"]
 asyncio = ["miniiocp"]
+graph = ["minigraph"]
 
 [dependencies]
 log = { version = "0.4", optional = true }
@@ -24,6 +25,7 @@ minifiber = { path = "../minifiber" }
 minithreadlocal = { path = "../minithreadlocal" }
 miniremotery = { path = "../miniremotery", optional = true }
 miniiocp = { path = "../miniiocp", optional = true }
+minigraph = { path = "../minigraph", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = [    "std"
@@ -41,3 +43,7 @@ winapi = { version = "0.3", features = [    "std"
 
 [dev-dependencies]
 env_logger = "0.6"
+
+[[example]]
+name = "task_graph"
+required-features = ["graph"]

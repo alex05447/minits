@@ -40,6 +40,9 @@ use miniiocp::{IOCPResult, IOCP};
 #[cfg(feature = "profiling")]
 pub type TaskSystemProfiler = dyn Profiler + Send + Sync;
 
+#[cfg(feature = "graph")]
+use minigraph::{TaskGraph, TaskVertex, VertexID};
+
 pub(super) type ThreadInitFiniCallback = dyn Fn(usize) + Send + Sync + 'static;
 
 /// Used to configure the task system.
@@ -356,6 +359,82 @@ impl TaskSystem {
     /// value in range `1 ..= num_worker_threads` means one of the worker threads.
     pub fn thread_index(&self) -> usize {
         self.thread_context.as_ref().thread_index()
+    }
+
+    #[cfg(feature = "graph")]
+    pub fn execute_graph<VID: VertexID + Send + Sync + std::fmt::Debug, T: Send + Sync, F>(
+        &self,
+        graph: &TaskGraph<VID, T>,
+        f: F
+    )
+    where
+        F: FnMut(&T) + Clone + Send
+    {
+        graph.reset();
+
+        let h = TaskHandle::new();
+
+        for (vertex_id, task_vertex) in graph.roots() {
+            let f = f.clone();
+            let h = &h;
+
+            unsafe {
+                self.task(
+                    h,
+                    move |ts: &TaskSystem| {
+                        ts.execute_graph_vertex(
+                            h,
+                            graph,
+                            vertex_id,
+                            task_vertex,
+                            f);
+                    }
+                )
+            }
+        }
+
+        unsafe {
+            self.wait_for_handle(&h);
+        }
+
+        graph.reset();
+    }
+
+    #[cfg(feature = "graph")]
+    fn execute_graph_vertex<VID: VertexID + Send + Sync + std::fmt::Debug, T: Send + Sync, F>(
+        &self,
+        task_handle: &TaskHandle,
+        graph: &TaskGraph<VID, T>,
+        vertex_id: VID,
+        task_vertex: &TaskVertex<T>,
+        mut f: F
+    )
+    where
+        F: FnMut(&T) + Clone + Send
+    {
+        if !task_vertex.is_ready() {
+            return;
+        }
+
+        f(task_vertex.vertex());
+
+        for (vertex_id, task_vertex) in graph.dependencies(vertex_id) {
+            let f = f.clone();
+
+            unsafe {
+                self.task(
+                    task_handle,
+                    move |ts: &TaskSystem| {
+                        ts.execute_graph_vertex(
+                            task_handle,
+                            graph,
+                            vertex_id,
+                            task_vertex,
+                            f);
+                    }
+                )
+            }
+        }
     }
 
     pub(crate) unsafe fn task<'scope, F>(&self, h: &'scope TaskHandle, f: F)

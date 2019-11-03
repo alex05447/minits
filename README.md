@@ -288,6 +288,8 @@ Actual features:
 
     Currently `File` does NOT inplement Rust's `Read` \ `Write` traits. Instead several methods are provided which do exactly what it says on the tin: `read` (read X bytes at offset 0), `read_at` (read X bytes at offset Y), `read_all` (read whole file), `read_all_at` (read till EOF from offset X), `write` (write X bytes at offset 0), `write_at` (write X bytes at offset Y).
 
+- "graph". Requires `minigraph`. Provides an API to execute a dependency graph in topological order, with non-dependant tasks executing in parallel.
+
 ## Architecture overview
 
 - An instance of the `TaskSystem` struct is created by the user. Safe to use from the "main" thread (in which it was created) and from within spawned tasks. A singleton interface is provided for convenience.
@@ -324,5 +326,6 @@ Actual features:
 - Win32 primitive wrappers via [`minifiber`](https://github.com/alex05447/minifiber), [`minievent`](https://github.com/alex05447/minievent), [`minithreadlocal`](https://github.com/alex05447/minithreadlocal) as path dependencies (TODO - github dependency?).
 - If "remotery" feature is enabled, `remotery` wrapper via [`miniremotery`](`https://github.com/alex05447/miniremotery`) as a path dependency (TODO - github dependency?).
 - If "asyncio" feature is enabled, Win32 IO completion port wrapper via [`miniiocp`](https://github.com/alex05447/miniiocp) as a path dependency (TODO - github dependency?).
+- If "graph" feature is enabled, [`minigraph`](https://github.com/alex05447/minigraph) as a path dependency (TODO - github dependency?).
 
 [^1]: See design notes for why the `TaskHandle` is necessary. Might change in the future.
