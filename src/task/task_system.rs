@@ -408,10 +408,10 @@ impl TaskSystem {
         graph: &TaskGraph<VID, T>,
         vertex_id: VID,
         task_vertex: &TaskVertex<T>,
-        mut f: F
+        f: F
     )
     where
-        F: FnMut(&T) + Clone + Send
+        F: Fn(&T) + Clone + Send
     {
         if !task_vertex.is_ready() {
             return;

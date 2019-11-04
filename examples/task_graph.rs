@@ -34,6 +34,14 @@ fn main() {
     #[cfg(feature = "tracing")]
     setup_logger();
 
+    // 0    1    3 <- these are the roots and may be scheduled to run immediately, in parallel.
+    // |\  /    /|
+    // | \/    / |
+    // | 2    /  4 <- these require (different) dependencies to be fulfilled, and may run in parallel.
+    // |_|_ _/_  |
+    //   |  /  \ |
+    //    6      5 <- and so on.
+
     let systems = [
         SystemDesc::new(SystemID(0), &[], &[ResourceID(0)]),
         SystemDesc::new(SystemID(1), &[], &[ResourceID(1)]),
