@@ -362,46 +362,47 @@ impl TaskSystem {
     }
 
     #[cfg(feature = "graph")]
-    pub fn execute_graph<VID: VertexID + Send + Sync + std::fmt::Debug, T: Send + Sync, F>(
+    pub fn execute_graph<VID: VertexID + Send + Sync, T: Send + Sync, F>(
         &self,
         graph: &TaskGraph<VID, T>,
         f: F
     )
     where
-        F: FnMut(&T) + Clone + Send
+        F: Fn(&T) + Clone + Send
     {
         graph.reset();
 
-        let h = TaskHandle::new();
+        let task_handle = TaskHandle::new();
+        let task_handle = &task_handle;
 
-        for (vertex_id, task_vertex) in graph.roots() {
-            let f = f.clone();
-            let h = &h;
-
-            unsafe {
-                self.task(
-                    h,
-                    move |ts: &TaskSystem| {
-                        ts.execute_graph_vertex(
-                            h,
-                            graph,
-                            vertex_id,
-                            task_vertex,
-                            f);
-                    }
-                )
-            }
-        }
+        let num_roots = graph.num_roots() as u32;
 
         unsafe {
-            self.wait_for_handle(&h);
+            self.task_range(
+                task_handle,
+                0 .. num_roots,
+                1,
+                move |roots: TaskRange, ts: &TaskSystem| {
+                    for (vertex_id, task_vertex) in roots.map(|idx| graph.get_root_unchecked(idx as usize)) {
+                        ts.execute_graph_vertex(
+                            task_handle,
+                            graph,
+                            *vertex_id,
+                            task_vertex,
+                            f.clone()
+                        );
+                    }
+                }
+            );
+
+            self.wait_for_handle(task_handle);
         }
 
         graph.reset();
     }
 
     #[cfg(feature = "graph")]
-    fn execute_graph_vertex<VID: VertexID + Send + Sync + std::fmt::Debug, T: Send + Sync, F>(
+    fn execute_graph_vertex<VID: VertexID + Send + Sync, T: Send + Sync, F>(
         &self,
         task_handle: &TaskHandle,
         graph: &TaskGraph<VID, T>,
@@ -418,21 +419,26 @@ impl TaskSystem {
 
         f(task_vertex.vertex());
 
-        for (vertex_id, task_vertex) in graph.dependencies(vertex_id).unwrap() {
-            let f = f.clone();
+        let num_dependencies = graph.num_dependencies(vertex_id).unwrap() as u32;
 
+        if num_dependencies > 0 {
             unsafe {
-                self.task(
+                self.task_range(
                     task_handle,
-                    move |ts: &TaskSystem| {
-                        ts.execute_graph_vertex(
-                            task_handle,
-                            graph,
-                            vertex_id,
-                            task_vertex,
-                            f);
+                    0 .. num_dependencies,
+                    1,
+                    move |dependencies: TaskRange, ts: &TaskSystem| {
+                        for (vertex_id, task_vertex) in dependencies.map(|idx| graph.get_dependency_unchecked(vertex_id, idx as usize)) {
+                            ts.execute_graph_vertex(
+                                task_handle,
+                                graph,
+                                *vertex_id,
+                                task_vertex,
+                                f.clone()
+                            );
+                        }
                     }
-                )
+                );
             }
         }
     }
@@ -481,7 +487,7 @@ impl TaskSystem {
         multiplier: u32,
         f: F,
     ) where
-        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
+        F: Fn(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         self.task_range_internal(None, None, h, range, multiplier, f);
     }
@@ -494,7 +500,7 @@ impl TaskSystem {
         multiplier: u32,
         f: F,
     ) where
-        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
+        F: Fn(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         self.task_range_internal(Some(task_name), None, h, range, multiplier, f);
     }
@@ -507,7 +513,7 @@ impl TaskSystem {
         multiplier: u32,
         f: F,
     ) where
-        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
+        F: Fn(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         self.task_range_internal(None, Some(scope_name), h, range, multiplier, f);
     }
@@ -521,7 +527,7 @@ impl TaskSystem {
         multiplier: u32,
         f: F,
     ) where
-        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
+        F: Fn(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         self.task_range_internal(Some(task_name), Some(scope_name), h, range, multiplier, f);
     }
@@ -598,7 +604,7 @@ impl TaskSystem {
         multiplier: u32,
         f: F,
     ) where
-        F: FnMut(TaskRange, &TaskSystem) + Send + Clone + 'scope,
+        F: Fn(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         assert!(range.end > range.start, "Expected a non-empty task range.");
 
