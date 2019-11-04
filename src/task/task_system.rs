@@ -361,6 +361,17 @@ impl TaskSystem {
         self.thread_context.as_ref().thread_index()
     }
 
+    /// Executes the closure `f` over the [`graph`], root-to-leaf,
+    /// executing the independent vertices in parallel.
+    ///
+    /// Dependent vertices are only processed when all of their dependencies have been fulfilled.
+    ///
+    /// The closure is passed the graph vertex payload.
+    ///
+    /// NOTE: the function [`reset`]'s the [`graph`] before executing it, so an explicit call to [`reset`] is unnecessary.
+    ///
+    /// [`graph`]: ../minigraph/struct.TaskGraph.html
+    /// [`reset`]: ../minigraph/struct.TaskGraph.html#method.reset
     #[cfg(feature = "graph")]
     pub fn execute_graph<VID: VertexID + Send + Sync, T: Send + Sync, F>(
         &self,
@@ -397,8 +408,6 @@ impl TaskSystem {
 
             self.wait_for_handle(task_handle);
         }
-
-        graph.reset();
     }
 
     #[cfg(feature = "graph")]
