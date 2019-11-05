@@ -331,7 +331,7 @@ fn nested_tasks_st() {
 }
 
 #[test]
-fn range_task() {
+fn task_range() {
     let ts = setup_default();
 
     let range = 1..64 * 1024;
@@ -356,7 +356,59 @@ fn range_task() {
 }
 
 #[test]
-fn range_task_st() {
+fn task_range_range() {
+    use minits::RangeTaskRange;
+
+    let ts = setup_default();
+
+    let range = 1..64 * 1024;
+
+    let sum_serial = range.clone().fold(0, |sum, val| sum + val);
+
+    let sum_parallel = AtomicU32::new(0);
+
+    let handle = ts.handle();
+    let mut scope = ts.scope(&handle);
+
+    range.task_range(&mut scope, 1, |el, _| {
+        sum_parallel.fetch_add(el, Ordering::SeqCst);
+    });
+
+    mem::drop(scope);
+
+    let sum_parallel = sum_parallel.load(Ordering::SeqCst);
+
+    assert_eq!(sum_serial, sum_parallel);
+}
+
+#[test]
+fn task_range_array() {
+    use minits::ArrayTaskRange;
+
+    let ts = setup_default();
+
+    let array = [1; 64];
+
+    let sum_serial = array.iter().fold(0, |sum, val| sum + val);
+
+    let sum_parallel = AtomicU32::new(0);
+
+    let handle = ts.handle();
+    let mut scope = ts.scope(&handle);
+
+    array.task_range(&mut scope, 1, |el, _| {
+        sum_parallel.fetch_add(*el, Ordering::SeqCst);
+    });
+
+    mem::drop(scope);
+
+    let sum_parallel = sum_parallel.load(Ordering::SeqCst);
+
+    assert_eq!(sum_serial, sum_parallel);
+}
+
+#[test]
+fn task_range_st() {
     let ts = setup(0, 0);
 
     let range = 1..64 * 1024;
@@ -371,6 +423,58 @@ fn range_task_st() {
     scope.task_range(range, 1, |range, _| {
         let local_sum = range.fold(0, |sum, val| sum + val);
         sum_parallel.fetch_add(local_sum, Ordering::SeqCst);
+    });
+
+    mem::drop(scope);
+
+    let sum_parallel = sum_parallel.load(Ordering::SeqCst);
+
+    assert_eq!(sum_serial, sum_parallel);
+}
+
+#[test]
+fn task_range_st_range() {
+    use minits::RangeTaskRange;
+
+    let ts = setup(0, 0);
+
+    let range = 1..64 * 1024;
+
+    let sum_serial = range.clone().fold(0, |sum, val| sum + val);
+
+    let sum_parallel = AtomicU32::new(0);
+
+    let handle = ts.handle();
+    let mut scope = ts.scope(&handle);
+
+    range.task_range(&mut scope, 1, |el, _| {
+        sum_parallel.fetch_add(el, Ordering::SeqCst);
+    });
+
+    mem::drop(scope);
+
+    let sum_parallel = sum_parallel.load(Ordering::SeqCst);
+
+    assert_eq!(sum_serial, sum_parallel);
+}
+
+#[test]
+fn task_range_st_array() {
+    use minits::ArrayTaskRange;
+
+    let ts = setup(0, 0);
+
+    let array = [1; 64];
+
+    let sum_serial = array.iter().fold(0, |sum, val| sum + val);
+
+    let sum_parallel = AtomicU32::new(0);
+
+    let handle = ts.handle();
+    let mut scope = ts.scope(&handle);
+
+    array.task_range(&mut scope, 1, |el, _| {
+        sum_parallel.fetch_add(*el, Ordering::SeqCst);
     });
 
     mem::drop(scope);

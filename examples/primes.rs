@@ -135,10 +135,9 @@ fn primes_in_range_internal<F>(range: &Range<u32>, f: F)
 where
     F: FnMut(u32),
 {
-    let range = range.clone();
     let mut f = f;
 
-    for num in range {
+    for num in range.clone() {
         if is_prime(num) {
             f(num);
         }

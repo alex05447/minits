@@ -155,3 +155,150 @@ impl<'scope, 'task_system> Drop for TaskScope<'scope, 'task_system> {
         }
     }
 }
+
+pub trait ArrayTaskRange<'scope, 'task_system> {
+    type Item;
+
+    fn task_range<F>(
+        &'scope self,
+        task_scope: &mut TaskScope<'scope, 'task_system>,
+        multiplier: u32,
+        f: F
+    )
+    where
+        F: Fn(&'scope Self::Item, &TaskSystem) + Send + Clone + 'scope;
+
+    fn task_range_named<F>(
+        &'scope self,
+        task_scope: &mut TaskScope<'scope, 'task_system>,
+        task_name: &str,
+        multiplier: u32,
+        f: F
+    )
+    where
+        F: Fn(&'scope Self::Item, &TaskSystem) + Send + Clone + 'scope;
+}
+
+impl<'scope, 'task_system, T: Sized + Send + Sync> ArrayTaskRange<'scope, 'task_system> for [T] {
+    type Item = T;
+
+    fn task_range<F>(
+        &'scope self,
+        task_scope: &mut TaskScope<'scope, 'task_system>,
+        multiplier: u32,
+        f: F
+    )
+    where
+        F: Fn(&'scope Self::Item, &TaskSystem) + Send + Clone + 'scope
+    {
+        use std::ops::Index;
+
+        let array = self;
+
+        task_scope.task_range(
+            0 .. self.len() as u32,
+            multiplier,
+            move |task_range: TaskRange, task_system: &TaskSystem| {
+                for i in task_range {
+                    f(array.index(i as usize), task_system);
+                }
+            }
+        );
+    }
+
+    fn task_range_named<F>(
+        &'scope self,
+        task_scope: &mut TaskScope<'scope, 'task_system>,
+        task_name: &str,
+        multiplier: u32,
+        f: F
+    )
+    where
+        F: Fn(&'scope Self::Item, &TaskSystem) + Send + Clone + 'scope
+    {
+        use std::ops::Index;
+
+        let array = self;
+
+        task_scope.task_range_named(
+            task_name,
+            0 .. self.len() as u32,
+            multiplier,
+            move |task_range: TaskRange, task_system: &TaskSystem| {
+                for i in task_range {
+                    f(array.index(i as usize), task_system);
+                }
+            }
+        );
+    }
+}
+
+pub trait RangeTaskRange<'scope, 'task_system> {
+    type Item;
+
+    fn task_range<F>(
+        &self,
+        task_scope: &mut TaskScope<'scope, 'task_system>,
+        multiplier: u32,
+        f: F
+    )
+    where
+        F: Fn(Self::Item, &TaskSystem) + Send + Clone + 'scope;
+
+    fn task_range_named<F>(
+        &self,
+        task_scope: &mut TaskScope<'scope, 'task_system>,
+        task_name: &str,
+        multiplier: u32,
+        f: F
+    )
+    where
+        F: Fn(Self::Item, &TaskSystem) + Send + Clone + 'scope;
+
+}
+
+impl<'scope, 'task_system> RangeTaskRange<'scope, 'task_system> for TaskRange {
+    type Item = u32;
+
+    fn task_range<F>(
+        &self,
+        task_scope: &mut TaskScope<'scope, 'task_system>,
+        multiplier: u32,
+        f: F
+    )
+    where
+        F: Fn(Self::Item, &TaskSystem) + Send + Clone + 'scope
+    {
+        task_scope.task_range(
+            self.start .. self.end,
+            multiplier,
+            move |task_range: TaskRange, task_system: &TaskSystem| {
+                for i in task_range {
+                    f(i, task_system);
+                }
+            }
+        );
+    }
+
+    fn task_range_named<F>(
+        &self,
+        task_scope: &mut TaskScope<'scope, 'task_system>,
+        task_name: &str,
+        multiplier: u32,
+        f: F
+    )
+    where
+        F: Fn(Self::Item, &TaskSystem) + Send + Clone + 'scope
+    {
+        task_scope.task_range_named(
+            task_name,
+            self.start .. self.end,
+            multiplier,
+            move |task_range: TaskRange, task_system: &TaskSystem| {
+                for i in task_range {
+                    f(i, task_system);
+                }
+            }
+        );
+    }
+}
