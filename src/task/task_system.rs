@@ -373,13 +373,13 @@ impl TaskSystem {
     /// [`graph`]: ../minigraph/struct.TaskGraph.html
     /// [`reset`]: ../minigraph/struct.TaskGraph.html#method.reset
     #[cfg(feature = "graph")]
-    pub fn execute_graph<VID: VertexID + Send + Sync, T: Send + Sync, F>(
+    pub fn task_graph<VID: VertexID + Send + Sync, T: Send + Sync, F>(
         &self,
         graph: &TaskGraph<VID, T>,
         f: F
     )
     where
-        F: Fn(&T) + Clone + Send
+        F: Fn(&T, &TaskSystem) + Clone + Send
     {
         graph.reset();
 
@@ -420,13 +420,13 @@ impl TaskSystem {
         f: F
     )
     where
-        F: Fn(&T) + Clone + Send
+        F: Fn(&T, &TaskSystem) + Clone + Send
     {
         if !task_vertex.is_ready() {
             return;
         }
 
-        f(task_vertex.vertex());
+        f(task_vertex.vertex(), self);
 
         let num_dependencies = graph.num_dependencies(vertex_id).unwrap() as u32;
 

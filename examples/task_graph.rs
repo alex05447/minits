@@ -61,9 +61,9 @@ fn main() {
 
     minits::init_task_system(builder);
 
-    minits::task_system().execute_graph(
+    minits::task_system().task_graph(
         &task_graph,
-        |system_id| {
+        |system_id, _| {
             let system = systems.iter().find(|system| system.id == *system_id).unwrap();
 
             println!("Execute system {:?}: read {:#?}, write {:#?}.", system_id, system.read, system.write);
