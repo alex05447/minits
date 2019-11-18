@@ -383,37 +383,77 @@ impl TaskSystem {
     {
         graph.reset();
 
-        let task_handle = TaskHandle::new();
-        let task_handle = &task_handle;
+        let h = self.handle();
+        let h = &h;
+        let mut task_scope = self.scope(h);
 
         let num_roots = graph.num_roots() as u32;
 
-        unsafe {
-            self.task_range(
-                task_handle,
-                0 .. num_roots,
-                1,
-                move |roots: TaskRange, ts: &TaskSystem| {
-                    for (vertex_id, task_vertex) in roots.map(|idx| graph.get_root_unchecked(idx as usize)) {
-                        ts.execute_graph_vertex(
-                            task_handle,
-                            graph,
-                            *vertex_id,
-                            task_vertex,
-                            f.clone()
-                        );
-                    }
+        task_scope.task_range(
+            0 .. num_roots,
+            1,
+            move |roots: TaskRange, ts: &TaskSystem| {
+                for (vertex_id, task_vertex) in roots.map(|idx| unsafe { graph.get_root_unchecked(idx as usize) } ) {
+                    ts.execute_graph_vertex(
+                        graph,
+                        *vertex_id,
+                        task_vertex,
+                        f.clone()
+                    );
                 }
-            );
+            }
+        );
+    }
 
-            self.wait_for_handle(task_handle);
-        }
+    /// Executes the closure `f` over the [`graph`], root-to-leaf,
+    /// executing the independent vertices in parallel.
+    ///
+    /// Dependent vertices are only processed when all of their dependencies have been fulfilled.
+    ///
+    /// The closure is passed the graph vertex payload.
+    ///
+    /// NOTE: the function [`reset`]'s the [`graph`] before executing it, so an explicit call to [`reset`] is unnecessary.
+    ///
+    /// [`graph`]: ../minigraph/struct.TaskGraph.html
+    /// [`reset`]: ../minigraph/struct.TaskGraph.html#method.reset
+    #[cfg(feature = "graph")]
+    pub fn task_graph_named<VID: VertexID + Send + Sync, T: Send + Sync, F>(
+        &self,
+        graph_name: &str,
+        graph: &TaskGraph<VID, T>,
+        f: F
+    )
+    where
+        F: Fn(&T, &TaskSystem) + Clone + Send
+    {
+        graph.reset();
+
+        let h = self.handle();
+        let h = &h;
+        let mut scope = self.scope_named(h, graph_name);
+
+        let num_roots = graph.num_roots() as u32;
+
+        scope.task_range_named(
+            graph_name,
+            0 .. num_roots,
+            1,
+            move |roots: TaskRange, ts: &TaskSystem| {
+                for (vertex_id, task_vertex) in roots.map(|idx| unsafe { graph.get_root_unchecked(idx as usize) } ) {
+                    ts.execute_graph_vertex(
+                        graph,
+                        *vertex_id,
+                        task_vertex,
+                        f.clone()
+                    );
+                }
+            }
+        );
     }
 
     #[cfg(feature = "graph")]
     fn execute_graph_vertex<VID: VertexID + Send + Sync, T: Send + Sync, F>(
         &self,
-        task_handle: &TaskHandle,
         graph: &TaskGraph<VID, T>,
         vertex_id: VID,
         task_vertex: &TaskVertex<T>,
@@ -431,24 +471,24 @@ impl TaskSystem {
         let num_dependencies = graph.num_dependencies(vertex_id).unwrap() as u32;
 
         if num_dependencies > 0 {
-            unsafe {
-                self.task_range(
-                    task_handle,
-                    0 .. num_dependencies,
-                    1,
-                    move |dependencies: TaskRange, ts: &TaskSystem| {
-                        for (vertex_id, task_vertex) in dependencies.map(|idx| graph.get_dependency_unchecked(vertex_id, idx as usize)) {
-                            ts.execute_graph_vertex(
-                                task_handle,
-                                graph,
-                                *vertex_id,
-                                task_vertex,
-                                f.clone()
-                            );
-                        }
+            let h = self.handle();
+            let h = &h;
+            let mut scope = self.scope(h);
+
+            scope.task_range(
+                0 .. num_dependencies,
+                1,
+                move |dependencies: TaskRange, ts: &TaskSystem| {
+                    for (vertex_id, task_vertex) in dependencies.map(|idx| unsafe { graph.get_dependency_unchecked(vertex_id, idx as usize) } ) {
+                        ts.execute_graph_vertex(
+                            graph,
+                            *vertex_id,
+                            task_vertex,
+                            f.clone()
+                        );
                     }
-                );
-            }
+                }
+            );
         }
     }
 
