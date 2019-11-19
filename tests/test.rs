@@ -73,6 +73,25 @@ fn one_task() {
 }
 
 #[test]
+fn one_task_main_thread() {
+    let ts = setup_default();
+
+    let mut arg = 7;
+
+    let handle = ts.handle();
+    let mut scope = ts.scope(&handle);
+
+    scope.task_main_thread(|ts| {
+        assert_eq!(ts.thread_index(), 0);
+        arg = 9;
+    });
+
+    mem::drop(scope);
+
+    assert!(arg == 9);
+}
+
+#[test]
 fn one_task_fn() {
     let ts = setup_default();
 
@@ -121,6 +140,29 @@ fn one_task_named() {
     assert!(arg == 9);
 }
 
+#[cfg(feature = "task_names")]
+#[test]
+fn one_task_named_main_thread() {
+    let ts = setup_default();
+
+    let mut arg = 7;
+
+    let handle = ts.handle();
+    let mut scope = ts.scope_named(&handle, "Scope 0");
+
+    scope.task_named("Task 0", |ts| {
+        assert_eq!(ts.thread_index(), 0);
+        assert_eq!(ts.task_name().unwrap(), "Task 0");
+        assert_eq!(ts.scope_name().unwrap(), "Scope 0");
+
+        arg = 9;
+    });
+
+    mem::drop(scope);
+
+    assert!(arg == 9);
+}
+
 #[test]
 fn one_task_st() {
     let ts = setup(0, 0);
@@ -130,7 +172,8 @@ fn one_task_st() {
     let handle = ts.handle();
     let mut scope = ts.scope(&handle);
 
-    scope.task(|_| {
+    scope.task(|ts| {
+        assert_eq!(ts.thread_index(), 0);
         arg = 9;
     });
 
@@ -152,6 +195,29 @@ fn multiple_tasks() {
 
     for _ in 0..num_tasks {
         scope.task(|_| {
+            arg.fetch_add(7, Ordering::SeqCst);
+        });
+    }
+
+    mem::drop(scope);
+
+    assert!(arg.load(Ordering::SeqCst) == 7 * num_tasks);
+}
+
+#[test]
+fn multiple_tasks_main_thread() {
+    let ts = setup_default();
+
+    let arg = AtomicU32::new(0);
+
+    let handle = ts.handle();
+    let mut scope = ts.scope(&handle);
+
+    let num_tasks = 10;
+
+    for _ in 0..num_tasks {
+        scope.task_main_thread(|ts| {
+            assert_eq!(ts.thread_index(), 0);
             arg.fetch_add(7, Ordering::SeqCst);
         });
     }
@@ -193,6 +259,40 @@ fn multiple_tasks_named() {
     assert!(arg.load(Ordering::SeqCst) == 7 * num_tasks);
 }
 
+#[cfg(feature = "task_names")]
+#[test]
+fn multiple_tasks_named_main_thread() {
+    let ts = setup_default();
+
+    let arg = AtomicUsize::new(0);
+
+    let handle = ts.handle();
+    let mut scope = ts.scope_named(&handle, "Scope 0");
+
+    let num_tasks = 10;
+
+    for i in 0..num_tasks {
+        let task_name = format!("Task {}", i);
+
+        let arg = &arg;
+
+        scope.task_named_main_thread(&task_name, move |ts| {
+            assert_eq!(ts.thread_index(), 0);
+
+            let task_name = format!("Task {}", i);
+
+            assert_eq!(ts.task_name().unwrap(), task_name);
+            assert_eq!(ts.scope_name().unwrap(), "Scope 0");
+
+            arg.fetch_add(7, Ordering::SeqCst);
+        });
+    }
+
+    mem::drop(scope);
+
+    assert!(arg.load(Ordering::SeqCst) == 7 * num_tasks);
+}
+
 #[test]
 fn multiple_tasks_st() {
     let ts = setup(0, 0);
@@ -205,7 +305,9 @@ fn multiple_tasks_st() {
     let num_tasks = 10;
 
     for _ in 0..num_tasks {
-        scope.task(|_| {
+        scope.task(|ts| {
+            assert_eq!(ts.thread_index(), 0);
+
             arg.fetch_add(7, Ordering::SeqCst);
         });
     }
@@ -312,13 +414,17 @@ fn nested_tasks_st() {
 
     for _ in 0..num_tasks {
         scope.task(|ts| {
+            assert_eq!(ts.thread_index(), 0);
+
             arg.fetch_add(7, Ordering::SeqCst);
 
             let handle = ts.handle();
             let mut scope = ts.scope(&handle);
 
             for _ in 0..num_nested_tasks {
-                scope.task(|_| {
+                scope.task(|ts| {
+                    assert_eq!(ts.thread_index(), 0);
+
                     arg.fetch_add(9, Ordering::SeqCst);
                 });
             }

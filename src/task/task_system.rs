@@ -492,95 +492,6 @@ impl TaskSystem {
         }
     }
 
-    pub(crate) unsafe fn task<'scope, F>(&self, h: &'scope TaskHandle, f: F)
-    where
-        F: FnOnce(&TaskSystem) + Send + 'scope,
-    {
-        self.task_internal(None, None, h, f);
-    }
-
-    pub(crate) unsafe fn task_named<'scope, F>(&self, task_name: &str, h: &'scope TaskHandle, f: F)
-    where
-        F: FnOnce(&TaskSystem) + Send + 'scope,
-    {
-        self.task_internal(Some(task_name), None, h, f);
-    }
-
-    pub(crate) unsafe fn task_scoped<'scope, F>(
-        &self,
-        scope_name: &str,
-        h: &'scope TaskHandle,
-        f: F,
-    ) where
-        F: FnOnce(&TaskSystem) + Send + 'scope,
-    {
-        self.task_internal(None, Some(scope_name), h, f);
-    }
-
-    pub(crate) unsafe fn task_named_scoped<'scope, F>(
-        &self,
-        task_name: &str,
-        scope_name: &str,
-        h: &'scope TaskHandle,
-        f: F,
-    ) where
-        F: FnOnce(&TaskSystem) + Send + 'scope,
-    {
-        self.task_internal(Some(task_name), Some(scope_name), h, f);
-    }
-
-    pub(crate) unsafe fn task_range<'scope, F>(
-        &self,
-        h: &'scope TaskHandle,
-        range: TaskRange,
-        multiplier: u32,
-        f: F,
-    ) where
-        F: Fn(TaskRange, &TaskSystem) + Send + Clone + 'scope,
-    {
-        self.task_range_internal(None, None, h, range, multiplier, f);
-    }
-
-    pub(crate) unsafe fn task_range_named<'scope, F>(
-        &self,
-        task_name: &str,
-        h: &'scope TaskHandle,
-        range: TaskRange,
-        multiplier: u32,
-        f: F,
-    ) where
-        F: Fn(TaskRange, &TaskSystem) + Send + Clone + 'scope,
-    {
-        self.task_range_internal(Some(task_name), None, h, range, multiplier, f);
-    }
-
-    pub(crate) unsafe fn task_range_scoped<'scope, F>(
-        &self,
-        scope_name: &str,
-        h: &'scope TaskHandle,
-        range: TaskRange,
-        multiplier: u32,
-        f: F,
-    ) where
-        F: Fn(TaskRange, &TaskSystem) + Send + Clone + 'scope,
-    {
-        self.task_range_internal(None, Some(scope_name), h, range, multiplier, f);
-    }
-
-    pub(crate) unsafe fn task_range_named_scoped<'scope, F>(
-        &self,
-        task_name: &str,
-        scope_name: &str,
-        h: &'scope TaskHandle,
-        range: TaskRange,
-        multiplier: u32,
-        f: F,
-    ) where
-        F: Fn(TaskRange, &TaskSystem) + Send + Clone + 'scope,
-    {
-        self.task_range_internal(Some(task_name), Some(scope_name), h, range, multiplier, f);
-    }
-
     pub(crate) unsafe fn wait_for_handle<'scope>(&self, h: &'scope TaskHandle) {
         self.wait_for_handle_internal(h, None);
     }
@@ -593,11 +504,12 @@ impl TaskSystem {
         self.wait_for_handle_internal(h, Some(scope_name));
     }
 
-    fn task_internal<'scope, F>(
+    pub(crate) unsafe fn task_internal<'scope, F>(
         &self,
         task_name: Option<&str>,
         scope_name: Option<&str>,
         h: &'scope TaskHandle,
+        main_thread: bool,
         f: F,
     ) where
         F: FnOnce(&TaskSystem) + Send + 'scope,
@@ -606,7 +518,7 @@ impl TaskSystem {
         self.global_task_handle.inc();
         h.inc();
 
-        let task = unsafe { TaskContext::new(task_name, scope_name, h, f) };
+        let task = TaskContext::new(task_name, scope_name, h, main_thread, f);
 
         self.on_task_added(&task);
 
@@ -644,7 +556,7 @@ impl TaskSystem {
         trace!("{}", s);
     }
 
-    fn task_range_internal<'scope, F>(
+    pub(crate) unsafe fn task_range_internal<'scope, F>(
         &self,
         task_name: Option<&str>,
         scope_name: Option<&str>,
@@ -741,23 +653,30 @@ impl TaskSystem {
                 let task_name = String::from(task_name.unwrap_or("<unnamed>"));
                 let f = f.clone();
 
-                self.task_internal(fork_task_name, scope_name, h, move |task_system| {
-                    let task_name = if cfg!(feature = "task_names") {
-                        Some(task_name.as_str())
-                    } else {
-                        None
-                    };
+                unsafe {
+                    self.task_internal(
+                        fork_task_name,
+                        scope_name,
+                        h,
+                        false,
+                        move |task_system| {
+                        let task_name = if cfg!(feature = "task_names") {
+                            Some(task_name.as_str())
+                        } else {
+                            None
+                        };
 
-                    task_system.fork_task_range(
-                        task_name,
-                        task_system.scope_name(),
-                        task_system.current_task_handle(),
-                        range_l,
-                        num_chunks_l,
-                        f,
-                        true,
-                    );
-                });
+                        task_system.fork_task_range(
+                            task_name,
+                            task_system.scope_name(),
+                            task_system.current_task_handle(),
+                            range_l,
+                            num_chunks_l,
+                            f,
+                            true,
+                        );
+                    });
+                }
             }
 
             // If right subrange cannot be further divided, execute it inline, if possible.
@@ -840,12 +759,19 @@ impl TaskSystem {
                 None
             };
 
-            self.task_internal(task_name, scope_name, h, move |task_system| {
-                #[cfg(feature = "profiling")]
-                let _scope = self.profiler_scope(task_system.task_name().unwrap_or("<unnamed>"));
+            unsafe {
+                self.task_internal(
+                    task_name,
+                    scope_name,
+                    h,
+                    false,
+                    move |task_system| {
+                    #[cfg(feature = "profiling")]
+                    let _scope = self.profiler_scope(task_system.task_name().unwrap_or("<unnamed>"));
 
-                f(range, task_system);
-            });
+                    f(range, task_system);
+                });
+            }
         }
     }
 
@@ -1076,12 +1002,11 @@ impl TaskSystem {
             thread_context.set_current_fiber(main_fiber);
         }
 
-        let mut main_task = unsafe {
-            TaskContext::new(Some("Main task"), None, &self.main_task_handle, |_| {
+        let main_task = unsafe {
+            TaskContext::new(Some("Main task"), None, &self.main_task_handle, true, |_| {
                 unreachable!();
             })
         };
-        main_task.is_main_task = true;
 
         thread_context.set_current_task(main_task);
 

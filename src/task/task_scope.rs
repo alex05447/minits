@@ -10,113 +10,127 @@ pub struct TaskScope<'scope, 'task_system> {
 }
 
 impl<'scope, 'task_system> TaskScope<'scope, 'task_system> {
-    /// Adds a new task closure to the task system.
+    /// Adds a new task closure to the [`TaskSystem`].
+    ///
     /// The closure takes a single `&TaskSystem` parameter and returns no values.
-    /// The task may run immediately and is guaranteed to finish when this `TaskScope` goes out of scope.
+    /// The task may run immediately and is guaranteed to be finished by the time this [`TaskScope`] goes out of scope.
+    ///
+    /// [`TaskSystem`]: struct.TaskSystem.html
+    /// [`TaskScope`]: struct.TaskScope.html
     pub fn task<F>(&mut self, f: F)
     where
         F: FnOnce(&TaskSystem) + Send + 'scope,
     {
         unsafe {
-            if let Some(scope_name) = self.name() {
-                self.task_system
-                    .task_scoped(scope_name, self.task_handle, f);
-            } else {
-                self.task_system.task(self.task_handle, f);
-            }
+            self.task_system.task_internal(None, self.name(), self.task_handle, false, f);
         }
     }
 
-    /// Adds a new task closure to the task system.
+    /// Adds a new task closure to the [`TaskSystem`] to be run in the "main" thread.
+    ///
     /// The closure takes a single `&TaskSystem` parameter and returns no values.
-    /// The task may run immediately and is guaranteed to finish when this `TaskScope` goes out of scope.
+    /// The task may run immediately and is guaranteed to be finished by the time this [`TaskScope`] goes out of scope.
+    ///
+    /// [`TaskSystem`]: struct.TaskSystem.html
+    /// [`TaskScope`]: struct.TaskScope.html
+    pub fn task_main_thread<F>(&mut self, f: F)
+    where
+        F: FnOnce(&TaskSystem) + Send + 'scope,
+    {
+        unsafe {
+            self.task_system.task_internal(None, self.name(), self.task_handle, true, f);
+        }
+    }
+
+    /// Adds a new task closure to the [`TaskSystem`].
+    ///
+    /// The closure takes a single `&TaskSystem` parameter and returns no values.
+    /// The task may run immediately and is guaranteed to be finished by the time this [`TaskScope`] goes out of scope.
     ///
     /// `task_name` may be retrieved by [`TaskSystem::task_name`] within the task closure.
     /// Requires "task_names" feature.
     ///
+    /// [`TaskSystem`]: struct.TaskSystem.html
+    /// [`TaskScope`]: struct.TaskScope.html
     /// [`TaskSystem::task_name`]: task_system/struct.TaskSystem.html#method.task_name
     pub fn task_named<F>(&mut self, task_name: &str, f: F)
     where
         F: FnOnce(&TaskSystem) + Send + 'scope,
     {
         unsafe {
-            if let Some(scope_name) = self.name() {
-                self.task_system
-                    .task_named_scoped(task_name, scope_name, self.task_handle, f);
-            } else {
-                self.task_system.task_named(task_name, self.task_handle, f);
-            }
+            self.task_system.task_internal(Some(task_name), self.name(), self.task_handle, false, f);
         }
     }
 
-    /// Adds a range of task closures to the task system.
-    /// Non-empty `range` is distributed over the number of task system threads (including the main thread),
+    /// Adds a new task closure to the [`TaskSystem`] to be run in the "main" thread.
+    ///
+    /// The closure takes a single `&TaskSystem` parameter and returns no values.
+    /// The task may run immediately and is guaranteed to be finished by the time this [`TaskScope`] goes out of scope.
+    ///
+    /// `task_name` may be retrieved by [`TaskSystem::task_name`] within the task closure.
+    /// Requires "task_names" feature.
+    ///
+    /// [`TaskSystem`]: struct.TaskSystem.html
+    /// [`TaskScope`]: struct.TaskScope.html
+    /// [`TaskSystem::task_name`]: task_system/struct.TaskSystem.html#method.task_name
+    pub fn task_named_main_thread<F>(&mut self, task_name: &str, f: F)
+    where
+        F: FnOnce(&TaskSystem) + Send + 'scope,
+    {
+        unsafe {
+            self.task_system.task_internal(Some(task_name), self.name(), self.task_handle, true, f);
+        }
+    }
+
+    /// Adds a range of task closures to the [`TaskSystem`].
+    ///
+    /// Non-empty [`range`] is distributed over the number of [`TaskSystem`] threads (including the main thread),
     /// multiplied by `multiplier` (i.e., `multiplier` == `2` means "divide the range into `2` chunks per thread").
     /// The closure takes a `std::ops::Range`, a `&TaskSystem` and returns no values.
     /// The closure must be clonable.
-    /// The task may run immediately and is guaranteed to finish when this `TaskScope` goes out of scope.
+    /// The task may run immediately and is guaranteed to be finished by the time this [`TaskScope`] goes out of scope.
     ///
     /// # Panics
     ///
-    /// Panics if `range` is empty.
+    /// Panics if [`range`] is empty.
+    ///
+    /// [`TaskSystem`]: struct.TaskSystem.html
+    /// [`range`]: type.TaskRange.html
+    /// [`TaskScope`]: struct.TaskScope.html
     pub fn task_range<F>(&mut self, range: TaskRange, multiplier: u32, f: F)
     where
         F: Fn(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         unsafe {
-            if let Some(scope_name) = self.name() {
-                self.task_system.task_range_scoped(
-                    scope_name,
-                    self.task_handle,
-                    range,
-                    multiplier,
-                    f,
-                );
-            } else {
-                self.task_system
-                    .task_range(self.task_handle, range, multiplier, f);
-            }
+            self.task_system.task_range_internal(None, self.name(), self.task_handle, range, multiplier, f);
         }
     }
 
-    /// Adds a range of task closures to the task system.
-    /// Non-empty `range` is distributed over the number of task system threads (including the main thread),
+    /// Adds a range of task closures to the [`TaskSystem`].
+    ///
+    /// Non-empty [`range`] is distributed over the number of [`TaskSystem`] threads (including the main thread),
     /// multiplied by `multiplier` (i.e., `multiplier` == `2` means "divide the range into `2` chunks per thread").
     /// The closure takes a `std::ops::Range`, a `&TaskSystem` and returns no values.
     /// The closure must be clonable.
-    /// The task may run immediately and is guaranteed to finish when this `TaskScope` goes out of scope.
+    /// The task may run immediately and is guaranteed to be finished by the time this [`TaskScope`] goes out of scope.
     ///
     /// `task_name` may be retrieved by [`TaskSystem::task_name`] within the task closure.
     /// Requires "task_names" feature.
     ///
     /// # Panics
     ///
-    /// Panics if `range` is empty.
+    /// Panics if [`range`] is empty.
     ///
+    /// [`TaskSystem`]: struct.TaskSystem.html
+    /// [`range`]: type.TaskRange.html
+    /// [`TaskScope`]: struct.TaskScope.html
     /// [`TaskSystem::task_name`]: task_system/struct.TaskSystem.html#method.task_name
     pub fn task_range_named<F>(&mut self, task_name: &str, range: TaskRange, multiplier: u32, f: F)
     where
         F: Fn(TaskRange, &TaskSystem) + Send + Clone + 'scope,
     {
         unsafe {
-            if let Some(scope_name) = self.name() {
-                self.task_system.task_range_named_scoped(
-                    task_name,
-                    scope_name,
-                    self.task_handle,
-                    range,
-                    multiplier,
-                    f,
-                );
-            } else {
-                self.task_system.task_range_named(
-                    task_name,
-                    self.task_handle,
-                    range,
-                    multiplier,
-                    f,
-                );
-            }
+            self.task_system.task_range_internal(Some(task_name), self.name(), self.task_handle, range, multiplier, f);
         }
     }
 

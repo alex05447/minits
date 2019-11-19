@@ -12,7 +12,7 @@ pub(super) struct TaskContext {
     /// Users may wait on this handle for this task to complete.
     pub(super) task_handle: ReferenceHolder<TaskHandle>,
 
-    pub(super) is_main_task: bool,
+    pub(super) main_thread: bool,
 
     #[cfg(feature = "task_names")]
     pub(super) task_name: Option<String>,
@@ -26,6 +26,7 @@ impl TaskContext {
         _task_name: Option<&str>,
         _scope_name: Option<&str>,
         h: &'any TaskHandle,
+        main_thread: bool,
         f: F,
     ) -> Self
     where
@@ -34,7 +35,7 @@ impl TaskContext {
         TaskContext {
             closure: ClosureHolder::once(f),
             task_handle: ReferenceHolder::from_ref(h),
-            is_main_task: false,
+            main_thread,
 
             #[cfg(feature = "task_names")]
             task_name: _task_name.map(|s| String::from(s)),

@@ -55,7 +55,7 @@ impl TaskQueue {
     }
 
     pub(super) fn add_task(&self, task: TaskContext) {
-        let (mut task_queue, event) = self.get_task_queue_and_event(task.is_main_task);
+        let (mut task_queue, event) = self.get_task_queue_and_event(task.main_thread);
 
         task_queue.push_back(task);
 
@@ -82,7 +82,7 @@ impl TaskQueue {
     }
 
     pub(super) fn return_resumed_fiber_and_task(&self, fiber_and_task: FiberAndTask) {
-        if fiber_and_task.task.is_main_task {
+        if fiber_and_task.task.main_thread {
             self.main_resumed_queue
                 .lock()
                 .unwrap()
@@ -144,7 +144,7 @@ impl TaskQueue {
 
     pub(super) fn push_resumed_fiber_and_task(&self, fiber_and_task: FiberAndTask) {
         let (mut resumed_queue, event) =
-            self.get_resumed_queue_and_event(fiber_and_task.task.is_main_task);
+            self.get_resumed_queue_and_event(fiber_and_task.task.main_thread);
 
         resumed_queue.push_back(fiber_and_task);
 
