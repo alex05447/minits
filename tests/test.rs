@@ -1,11 +1,13 @@
-use std::mem;
-use std::sync::atomic::{AtomicU32, Ordering};
+use {
+    minits::*,
+    std::{
+        mem,
+        sync::atomic::{AtomicU32, Ordering},
+    },
+};
 
 #[cfg(feature = "tracing")]
-use std::{
-    io::Write,
-    sync::{Once, ONCE_INIT},
-};
+use std::{io::Write, sync::Once};
 
 #[cfg(feature = "task_names")]
 use std::sync::atomic::AtomicUsize;
@@ -16,11 +18,9 @@ extern crate log;
 #[cfg(feature = "tracing")]
 extern crate env_logger;
 
-use minits::{TaskSystem, TaskSystemBuilder};
-
 #[cfg(feature = "tracing")]
 fn setup_logger_internal() {
-    static INIT: Once = ONCE_INIT;
+    static INIT: Once = Once::new();
 
     INIT.call_once(|| {
         let mut builder = env_logger::Builder::new();
@@ -37,7 +37,7 @@ fn setup_logger() {
     setup_logger_internal();
 }
 
-fn setup(num_worker_threads: usize, num_fibers: usize) -> Box<TaskSystem> {
+fn setup(num_worker_threads: u32, num_fibers: u32) -> Box<TaskSystem> {
     setup_logger();
 
     TaskSystemBuilder::new()
@@ -52,16 +52,13 @@ fn setup_default() -> Box<TaskSystem> {
     setup(3, 32)
 }
 
-// cargo test --features=tracing -- --test-threads=1
-
 #[test]
 fn one_task() {
     let ts = setup_default();
 
     let mut arg = 7;
 
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
+    task_scope!(scope, &ts);
 
     scope.task(|_| {
         arg = 9;
@@ -78,13 +75,14 @@ fn one_task_main_thread() {
 
     let mut arg = 7;
 
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
+    task_scope!(scope, &ts);
 
-    scope.task_main_thread(|ts| {
-        assert_eq!(ts.thread_index(), 0);
-        arg = 9;
-    });
+    scope
+        .task(|ts| {
+            assert_eq!(ts.thread_index(), 0);
+            arg = 9;
+        })
+        .main_thread();
 
     mem::drop(scope);
 
@@ -98,8 +96,7 @@ fn one_task_fn() {
     static ARG: usize = 7;
     static mut RES: usize = 0;
 
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
+    task_scope!(scope, &ts);
 
     fn task_fn(_: &TaskSystem) {
         assert!(ARG == 7);
@@ -125,15 +122,16 @@ fn one_task_named() {
 
     let mut arg = 7;
 
-    let handle = ts.handle();
-    let mut scope = ts.scope_named(&handle, "Scope 0");
+    task_scope_named!(scope, "Scope 0".to_owned(), &ts);
 
-    scope.task_named("Task 0", |ts| {
-        assert_eq!(ts.task_name().unwrap(), "Task 0");
-        assert_eq!(ts.scope_name().unwrap(), "Scope 0");
+    scope
+        .task(|ts| {
+            assert_eq!(ts.task_name().unwrap(), "Task 0");
+            assert_eq!(ts.scope_name().unwrap(), "Scope 0");
 
-        arg = 9;
-    });
+            arg = 9;
+        })
+        .name("Task 0");
 
     mem::drop(scope);
 
@@ -147,16 +145,18 @@ fn one_task_named_main_thread() {
 
     let mut arg = 7;
 
-    let handle = ts.handle();
-    let mut scope = ts.scope_named(&handle, "Scope 0");
+    task_scope_named!(scope, "Scope 0".to_owned(), &ts);
 
-    scope.task_named("Task 0", |ts| {
-        assert_eq!(ts.thread_index(), 0);
-        assert_eq!(ts.task_name().unwrap(), "Task 0");
-        assert_eq!(ts.scope_name().unwrap(), "Scope 0");
+    scope
+        .task(|ts| {
+            assert_eq!(ts.thread_index(), 0);
+            assert_eq!(ts.task_name().unwrap(), "Task 0");
+            assert_eq!(ts.scope_name().unwrap(), "Scope 0");
 
-        arg = 9;
-    });
+            arg = 9;
+        })
+        .main_thread()
+        .name("Task 0");
 
     mem::drop(scope);
 
@@ -169,8 +169,7 @@ fn one_task_st() {
 
     let mut arg = 7;
 
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
+    task_scope!(scope, &ts);
 
     scope.task(|ts| {
         assert_eq!(ts.thread_index(), 0);
@@ -188,8 +187,7 @@ fn multiple_tasks() {
 
     let arg = AtomicU32::new(0);
 
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
+    task_scope!(scope, &ts);
 
     let num_tasks = 10;
 
@@ -210,16 +208,17 @@ fn multiple_tasks_main_thread() {
 
     let arg = AtomicU32::new(0);
 
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
+    task_scope!(scope, &ts);
 
     let num_tasks = 10;
 
     for _ in 0..num_tasks {
-        scope.task_main_thread(|ts| {
-            assert_eq!(ts.thread_index(), 0);
-            arg.fetch_add(7, Ordering::SeqCst);
-        });
+        scope
+            .task(|ts| {
+                assert_eq!(ts.thread_index(), 0);
+                arg.fetch_add(7, Ordering::SeqCst);
+            })
+            .main_thread();
     }
 
     mem::drop(scope);
@@ -234,8 +233,7 @@ fn multiple_tasks_named() {
 
     let arg = AtomicUsize::new(0);
 
-    let handle = ts.handle();
-    let mut scope = ts.scope_named(&handle, "Scope 0");
+    task_scope_named!(scope, "Scope 0".to_owned(), &ts);
 
     let num_tasks = 10;
 
@@ -244,14 +242,17 @@ fn multiple_tasks_named() {
 
         let arg = &arg;
 
-        scope.task_named(&task_name, move |ts| {
-            let task_name = format!("Task {}", i);
+        scope
+            .task(move |ts| {
+                let task_name = format!("Task {}", i);
 
-            assert_eq!(ts.task_name().unwrap(), task_name);
-            assert_eq!(ts.scope_name().unwrap(), "Scope 0");
+                assert_eq!(ts.task_name().unwrap(), task_name);
+                assert_eq!(ts.scope_name().unwrap(), "Scope 0");
 
-            arg.fetch_add(7, Ordering::SeqCst);
-        });
+                arg.fetch_add(7, Ordering::SeqCst);
+            })
+            .name(task_name)
+            .submit();
     }
 
     mem::drop(scope);
@@ -266,8 +267,7 @@ fn multiple_tasks_named_main_thread() {
 
     let arg = AtomicUsize::new(0);
 
-    let handle = ts.handle();
-    let mut scope = ts.scope_named(&handle, "Scope 0");
+    task_scope_named!(scope, "Scope 0".to_owned(), &ts);
 
     let num_tasks = 10;
 
@@ -276,16 +276,19 @@ fn multiple_tasks_named_main_thread() {
 
         let arg = &arg;
 
-        scope.task_named_main_thread(&task_name, move |ts| {
-            assert_eq!(ts.thread_index(), 0);
+        scope
+            .task(move |ts| {
+                assert_eq!(ts.thread_index(), 0);
 
-            let task_name = format!("Task {}", i);
+                let task_name = format!("Task {}", i);
 
-            assert_eq!(ts.task_name().unwrap(), task_name);
-            assert_eq!(ts.scope_name().unwrap(), "Scope 0");
+                assert_eq!(ts.task_name().unwrap(), task_name);
+                assert_eq!(ts.scope_name().unwrap(), "Scope 0");
 
-            arg.fetch_add(7, Ordering::SeqCst);
-        });
+                arg.fetch_add(7, Ordering::SeqCst);
+            })
+            .name(task_name)
+            .main_thread();
     }
 
     mem::drop(scope);
@@ -299,17 +302,18 @@ fn multiple_tasks_st() {
 
     let arg = AtomicU32::new(0);
 
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
+    task_scope!(scope, &ts);
 
     let num_tasks = 10;
 
     for _ in 0..num_tasks {
-        scope.task(|ts| {
-            assert_eq!(ts.thread_index(), 0);
+        scope
+            .task(|ts| {
+                assert_eq!(ts.thread_index(), 0);
 
-            arg.fetch_add(7, Ordering::SeqCst);
-        });
+                arg.fetch_add(7, Ordering::SeqCst);
+            })
+            .submit();
     }
 
     mem::drop(scope);
@@ -323,8 +327,7 @@ fn nested_tasks() {
 
     let arg = AtomicU32::new(0);
 
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
+    task_scope!(scope, ts);
 
     let num_tasks = 10;
     let num_nested_tasks = 10;
@@ -333,8 +336,7 @@ fn nested_tasks() {
         scope.task(|ts| {
             arg.fetch_add(7, Ordering::SeqCst);
 
-            let handle = ts.handle();
-            let mut scope = ts.scope(&handle);
+            task_scope!(scope, ts);
 
             for _ in 0..num_nested_tasks {
                 scope.task(|_| {
@@ -346,7 +348,10 @@ fn nested_tasks() {
 
     mem::drop(scope);
 
-    assert!(arg.load(Ordering::SeqCst) == 7 * num_tasks + num_tasks * num_nested_tasks * 9);
+    assert_eq!(
+        arg.load(Ordering::SeqCst),
+        7 * num_tasks + num_tasks * num_nested_tasks * 9
+    );
 }
 
 #[cfg(feature = "task_names")]
@@ -356,8 +361,7 @@ fn nested_tasks_named() {
 
     let arg = AtomicUsize::new(0);
 
-    let handle = ts.handle();
-    let mut scope = ts.scope_named(&handle, "Scope 0");
+    task_scope_named!(scope, "Scope 0".to_owned(), &ts);
 
     let num_tasks = 10;
     let num_nested_tasks = 10;
@@ -367,32 +371,35 @@ fn nested_tasks_named() {
 
         let arg = &arg;
 
-        scope.task_named(&task_name, move |ts| {
-            let task_name = format!("Task {}", i);
+        scope
+            .task(move |ts| {
+                let task_name = format!("Task {}", i);
 
-            assert_eq!(ts.task_name().unwrap(), task_name);
-            assert_eq!(ts.scope_name().unwrap(), "Scope 0");
+                assert_eq!(ts.task_name().unwrap(), task_name);
+                assert_eq!(ts.scope_name().unwrap(), "Scope 0");
 
-            arg.fetch_add(7, Ordering::SeqCst);
+                arg.fetch_add(7, Ordering::SeqCst);
 
-            let handle = ts.handle();
-            let mut scope = ts.scope_named(&handle, "Nested scope 0");
+                task_scope_named!(scope, "Nested scope 0".to_owned(), &ts);
 
-            for j in 0..num_nested_tasks {
-                let task_name = format!("Nested task {}", j);
-
-                let arg = arg;
-
-                scope.task_named(&task_name, move |ts| {
+                for j in 0..num_nested_tasks {
                     let task_name = format!("Nested task {}", j);
 
-                    assert_eq!(ts.task_name().unwrap(), task_name);
-                    assert_eq!(ts.scope_name().unwrap(), "Nested scope 0");
+                    let arg = arg;
 
-                    arg.fetch_add(9, Ordering::SeqCst);
-                });
-            }
-        });
+                    scope
+                        .task(move |ts| {
+                            let task_name = format!("Nested task {}", j);
+
+                            assert_eq!(ts.task_name().unwrap(), task_name);
+                            assert_eq!(ts.scope_name().unwrap(), "Nested scope 0");
+
+                            arg.fetch_add(9, Ordering::SeqCst);
+                        })
+                        .name(task_name);
+                }
+            })
+            .name(task_name);
     }
 
     mem::drop(scope);
@@ -406,8 +413,7 @@ fn nested_tasks_st() {
 
     let arg = AtomicU32::new(0);
 
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
+    task_scope!(scope, &ts);
 
     let num_tasks = 10;
     let num_nested_tasks = 10;
@@ -418,8 +424,7 @@ fn nested_tasks_st() {
 
             arg.fetch_add(7, Ordering::SeqCst);
 
-            let handle = ts.handle();
-            let mut scope = ts.scope(&handle);
+            task_scope!(scope, &ts);
 
             for _ in 0..num_nested_tasks {
                 scope.task(|ts| {
@@ -446,10 +451,9 @@ fn task_range() {
 
     let sum_parallel = AtomicU32::new(0);
 
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
+    task_scope!(scope, &ts);
 
-    scope.task_range(range, 1, |range, _| {
+    scope.task_range(range, |range, _| {
         let local_sum = range.fold(0, |sum, val| sum + val);
         sum_parallel.fetch_add(local_sum, Ordering::SeqCst);
     });
@@ -462,47 +466,18 @@ fn task_range() {
 }
 
 #[test]
-fn task_range_range() {
-    use minits::RangeTaskRange;
-
+fn slice_range() {
     let ts = setup_default();
 
-    let range = 1..64 * 1024;
+    let slice = [1; 64];
 
-    let sum_serial = range.clone().fold(0, |sum, val| sum + val);
+    let sum_serial = slice.iter().fold(0, |sum, val| sum + val);
 
     let sum_parallel = AtomicU32::new(0);
 
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
+    task_scope!(scope, &ts);
 
-    range.task_range(&mut scope, 1, |el, _| {
-        sum_parallel.fetch_add(el, Ordering::SeqCst);
-    });
-
-    mem::drop(scope);
-
-    let sum_parallel = sum_parallel.load(Ordering::SeqCst);
-
-    assert_eq!(sum_serial, sum_parallel);
-}
-
-#[test]
-fn task_range_array() {
-    use minits::ArrayTaskRange;
-
-    let ts = setup_default();
-
-    let array = [1; 64];
-
-    let sum_serial = array.iter().fold(0, |sum, val| sum + val);
-
-    let sum_parallel = AtomicU32::new(0);
-
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
-
-    array.task_range(&mut scope, 1, |el, _| {
+    scope.slice_range(&slice, |el, _| {
         sum_parallel.fetch_add(*el, Ordering::SeqCst);
     });
 
@@ -523,10 +498,9 @@ fn task_range_st() {
 
     let sum_parallel = AtomicU32::new(0);
 
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
+    task_scope!(scope, &ts);
 
-    scope.task_range(range, 1, |range, _| {
+    scope.task_range(range, |range, _| {
         let local_sum = range.fold(0, |sum, val| sum + val);
         sum_parallel.fetch_add(local_sum, Ordering::SeqCst);
     });
@@ -539,47 +513,18 @@ fn task_range_st() {
 }
 
 #[test]
-fn task_range_st_range() {
-    use minits::RangeTaskRange;
-
+fn slice_range_st() {
     let ts = setup(0, 0);
 
-    let range = 1..64 * 1024;
+    let slice = [1; 64];
 
-    let sum_serial = range.clone().fold(0, |sum, val| sum + val);
+    let sum_serial = slice.iter().fold(0, |sum, val| sum + val);
 
     let sum_parallel = AtomicU32::new(0);
 
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
+    task_scope!(scope, &ts);
 
-    range.task_range(&mut scope, 1, |el, _| {
-        sum_parallel.fetch_add(el, Ordering::SeqCst);
-    });
-
-    mem::drop(scope);
-
-    let sum_parallel = sum_parallel.load(Ordering::SeqCst);
-
-    assert_eq!(sum_serial, sum_parallel);
-}
-
-#[test]
-fn task_range_st_array() {
-    use minits::ArrayTaskRange;
-
-    let ts = setup(0, 0);
-
-    let array = [1; 64];
-
-    let sum_serial = array.iter().fold(0, |sum, val| sum + val);
-
-    let sum_parallel = AtomicU32::new(0);
-
-    let handle = ts.handle();
-    let mut scope = ts.scope(&handle);
-
-    array.task_range(&mut scope, 1, |el, _| {
+    scope.slice_range(&slice, |el, _| {
         sum_parallel.fetch_add(*el, Ordering::SeqCst);
     });
 
@@ -592,30 +537,32 @@ fn task_range_st_array() {
 
 #[test]
 fn thread_init_fini() {
-    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
-    use minithreadlocal::ThreadLocal;
+    use {
+        minithreadlocal::ThreadLocal,
+        std::sync::{atomic::Ordering, Arc},
+    };
 
     setup_logger();
 
-    let num_worker_threads = 3;
-    let worker_thread_counter = Arc::new(AtomicUsize::new(0));
+    let num_worker_threads = 3u32;
+    let worker_thread_counter = Arc::new(AtomicU32::new(0));
 
-    let mut thread_local = ThreadLocal::<usize>::new();
+    let mut thread_local = ThreadLocal::<u32>::new().unwrap();
 
     let worker_thread_counter_clone = worker_thread_counter.clone();
 
-    let thread_init = move |thread_index: usize| {
-        assert!((1 ..= num_worker_threads).contains(&thread_index));
+    let thread_init = move |thread_index: u32| {
+        assert!((1..=num_worker_threads).contains(&thread_index));
 
-        thread_local.store(thread_index);
+        thread_local.store(thread_index).unwrap();
 
         worker_thread_counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     };
 
-    let thread_fini = move |thread_index: usize| {
-        assert!((1 ..= num_worker_threads).contains(&thread_index));
+    let thread_fini = move |thread_index: u32| {
+        assert!((1..=num_worker_threads).contains(&thread_index));
 
-        let thread_local = thread_local.take();
+        let thread_local = thread_local.take().unwrap().unwrap();
 
         assert_eq!(thread_local, thread_index);
     };
@@ -631,7 +578,10 @@ fn thread_init_fini() {
             .build();
     }
 
-    assert_eq!(worker_thread_counter.load(Ordering::SeqCst), num_worker_threads);
+    assert_eq!(
+        worker_thread_counter.load(Ordering::SeqCst),
+        num_worker_threads
+    );
 
-    thread_local.free_index();
+    thread_local.free_index().unwrap();
 }

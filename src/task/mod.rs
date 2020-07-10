@@ -1,29 +1,40 @@
-mod task_handle;
-
-pub use task_handle::TaskHandle;
-
+mod builder;
 mod fiber_pool;
-mod reference_holder;
-mod task_context;
+mod handle;
+mod scope;
+mod task;
 mod task_queue;
-mod thread_context;
+mod task_system;
+mod task_system_singleton;
+mod thread;
+mod util;
 mod yield_queue;
+
+#[cfg(feature = "tracing")]
+mod task_system_tracing;
+
+#[cfg(feature = "profiling")]
+mod task_system_profiling;
+
+#[cfg(feature = "graph")]
+mod task_system_graph;
 
 #[cfg(feature = "asyncio")]
 mod fs;
 
-pub mod task_scope;
-pub mod task_system;
-pub mod task_system_singleton;
+#[cfg(feature = "asyncio")]
+mod task_system_io;
 
-pub use task_scope::{TaskScope, ArrayTaskRange, RangeTaskRange};
-pub use task_system::{TaskSystem, TaskSystemBuilder};
-pub use task_system_singleton::{
-    fini_task_system, handle, init_task_system, scope, scope_named, task_system,
+pub use {
+    builder::{TaskSystemBuilder, ThreadInitFiniCallback},
+    handle::Handle,
+    scope::{RangeTaskFn, Scope, ScopedRangeTask, ScopedTask, SliceTaskFn, TaskFn, TaskRange},
+    task_system::TaskSystem,
+    task_system_singleton::{fini_task_system, init_task_system, task_system},
 };
-
-#[cfg(feature = "profiling")]
-pub use task_system::TaskSystemProfiler;
 
 #[cfg(feature = "asyncio")]
 pub use fs::{File, OpenOptions};
+
+#[cfg(feature = "graph")]
+pub use scope::{GraphTaskFn, ScopedGraphTask};

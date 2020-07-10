@@ -32,14 +32,12 @@ fn main() {
     #[cfg(feature = "tracing")]
     setup_logger();
 
-    let num_cores =
-        minits::get_num_physical_cores().max(1);
+    let num_cores = minits::get_num_physical_cores().max(1);
     //  minits::get_num_logical_cores().max(1);
 
     let num_worker_threads = num_cores - 1;
 
-    let builder = minits::TaskSystemBuilder::new()
-        .num_worker_threads(num_worker_threads);
+    let builder = minits::TaskSystemBuilder::new().num_worker_threads(num_worker_threads);
 
     minits::init_task_system(builder);
 
@@ -57,7 +55,7 @@ fn main() {
     let mut primes_serial = Vec::new();
 
     for run in 0..num_serial_runs {
-        println!("Serial start run {}", run);
+        println!("[Serial primes] Start run {}", run);
         let timer_serial = time::Instant::now();
 
         primes_serial = primes_in_range_serial(&range);
@@ -66,13 +64,18 @@ fn main() {
         total_time_serial += elapsed_serial;
         avg_time_serial = (elapsed_serial + run * avg_time_serial) / (run + 1);
 
-        println!("Serial end. Elapsed: {:?}", elapsed_serial);
+        println!(
+            "[Serial primes] End run {}. {} primes generated in {:?}",
+            run,
+            primes_serial.len(),
+            elapsed_serial
+        );
     }
 
     let mut primes_parallel = Vec::new();
 
     for run in 0..num_parallel_runs {
-        println!("Prallel start run {}", run);
+        println!("[Parallel primes] Start run {}", run);
         let timer_parallel = time::Instant::now();
 
         primes_parallel = primes_in_range_parallel(&range, 8);
@@ -81,7 +84,12 @@ fn main() {
         total_time_parallel += elapsed_parallel;
         avg_time_parallel = (elapsed_parallel + run * avg_time_parallel) / (run + 1);
 
-        println!("Parallel end. Elapsed: {:?}", elapsed_parallel);
+        println!(
+            "[Parallel primes] End run {}. {} primes generated in: {:?}",
+            run,
+            primes_serial.len(),
+            elapsed_parallel
+        );
     }
 
     assert!(primes_serial.len() == primes_parallel.len());
@@ -161,9 +169,12 @@ fn primes_in_range_parallel(range: &Range<u32>, multiplier: u32) -> Vec<u32> {
     let handle = minits::task_system().handle();
     let mut scope = minits::task_system().scope(&handle);
 
-    scope.task_range_named("Parallel primes", range, multiplier, move |range, _| {
-        primes_in_range_internal(&range, |num| tx.send(num).unwrap())
-    });
+    scope
+        .task_range(range, move |range, _| {
+            primes_in_range_internal(&range, |num| tx.send(num).unwrap())
+        })
+        .name("Parallel primes")
+        .multiplier(multiplier);
 
     // If `true`, main thread helps the worker threads by executing spawned tasks.
     // After all tasks are complete, we have a full queue of generated primes.

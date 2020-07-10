@@ -1,18 +1,14 @@
-use miniremotery::Remotery;
+use {crate::profiler::Profiler, miniremotery::Remotery};
 
-use crate::profiler::Profiler;
-
-pub struct RemoteryProfiler {
-    _remotery: Remotery,
-}
+pub struct RemoteryProfiler(Remotery);
 
 unsafe impl Send for RemoteryProfiler {}
 unsafe impl Sync for RemoteryProfiler {}
 
 impl RemoteryProfiler {
     pub fn new() -> Option<Self> {
-        if let Ok(_remotery) = Remotery::initialize() {
-            Some(Self { _remotery })
+        if let Ok(remotery) = Remotery::initialize() {
+            Some(Self(remotery))
         } else {
             None
         }

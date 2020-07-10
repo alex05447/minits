@@ -1,26 +1,26 @@
-use std::cmp;
-use std::fs;
-use std::io;
-use std::mem;
-use std::num::NonZeroUsize;
-use std::path::Path;
-use std::sync::atomic::{ AtomicBool, Ordering };
-
-use winapi::shared::minwindef::DWORD;
-use winapi::shared::winerror::ERROR_IO_PENDING;
-use winapi::um::errhandlingapi::GetLastError;
-use winapi::um::fileapi::{ReadFile, WriteFile};
-use winapi::um::ioapiset::GetOverlappedResult;
-use winapi::um::minwinbase::OVERLAPPED;
-use winapi::um::winbase::{
-    SetFileCompletionNotificationModes, FILE_FLAG_OVERLAPPED, FILE_SKIP_COMPLETION_PORT_ON_SUCCESS,
-    FILE_SKIP_SET_EVENT_ON_HANDLE,
+use {
+    crate::task::task_system::{TaskSystem, YieldData, YieldKey},
+    std::{
+        cmp, fs, io, mem,
+        num::NonZeroUsize,
+        os::windows::{fs::OpenOptionsExt, io::AsRawHandle},
+        path::Path,
+        sync::atomic::{AtomicBool, Ordering},
+    },
+    winapi::{
+        shared::{minwindef::DWORD, winerror::ERROR_IO_PENDING},
+        um::{
+            errhandlingapi::GetLastError,
+            fileapi::{ReadFile, WriteFile},
+            ioapiset::GetOverlappedResult,
+            minwinbase::OVERLAPPED,
+            winbase::{
+                SetFileCompletionNotificationModes, FILE_FLAG_OVERLAPPED,
+                FILE_SKIP_COMPLETION_PORT_ON_SUCCESS, FILE_SKIP_SET_EVENT_ON_HANDLE,
+            },
+        },
+    },
 };
-
-use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::io::AsRawHandle;
-
-use crate::task::task_system::{TaskSystem, YieldData};
 
 /// Used by the task system to provide means for calling code to wait for IO operation completion.
 /// Only one IO operation may be associated with one `IOHandle`.
@@ -41,28 +41,22 @@ impl IOHandle {
 }
 
 /// See [`std::fs::File`](https://doc.rust-lang.org/std/fs/struct.File.html).
-pub struct File<'task_system> {
+pub struct File<'ts> {
     file: fs::File,
-    task_system: &'task_system TaskSystem,
+    task_system: &'ts TaskSystem,
 
     #[cfg(feature = "tracing")]
     file_name: String,
 }
 
-impl<'task_system> File<'task_system> {
+impl<'ts> File<'ts> {
     /// See [`std::fs::File::open`](https://doc.rust-lang.org/std/fs/struct.File.html#method.open).
-    pub fn open<P: AsRef<Path>>(
-        task_system: &'task_system TaskSystem,
-        path: P,
-    ) -> io::Result<File<'task_system>> {
+    pub fn open<P: AsRef<Path>>(task_system: &'ts TaskSystem, path: P) -> io::Result<File<'ts>> {
         OpenOptions::new().read(true).open(task_system, path)
     }
 
     /// See [`std::fs::File::create`](https://doc.rust-lang.org/std/fs/struct.File.html#method.create).
-    pub fn create<P: AsRef<Path>>(
-        task_system: &'task_system TaskSystem,
-        path: P,
-    ) -> io::Result<File<'task_system>> {
+    pub fn create<P: AsRef<Path>>(task_system: &'ts TaskSystem, path: P) -> io::Result<File<'ts>> {
         OpenOptions::new()
             .write(true)
             .create(true)
@@ -91,13 +85,13 @@ impl<'task_system> File<'task_system> {
         let mut io_handle = IOHandle::new();
 
         unsafe {
-            io_handle.overlapped.u.s_mut().Offset = offset as u32;
-            io_handle.overlapped.u.s_mut().OffsetHigh = (offset >> 32) as u32;
+            io_handle.overlapped.u.s_mut().Offset = offset as _;
+            io_handle.overlapped.u.s_mut().OffsetHigh = (offset >> 32) as _;
         }
 
-        let len = cmp::min(buf.len(), <DWORD>::max_value() as usize) as DWORD;
+        let len = cmp::min(buf.len(), <DWORD>::max_value() as _) as _;
 
-        let mut written: DWORD = 0;
+        let mut written = 0;
 
         let result = unsafe {
             WriteFile(
@@ -111,7 +105,9 @@ impl<'task_system> File<'task_system> {
 
         // The write completed synchronously.
         if result != 0 {
-            return Ok(written as usize);
+            return Ok(written as _);
+
+        // Else the write either completed asynchronously or there was an error.
         } else {
             let error = unsafe { GetLastError() };
 
@@ -119,9 +115,7 @@ impl<'task_system> File<'task_system> {
             if error == ERROR_IO_PENDING {
                 self.wait_for_io_start(self.file_name(), false);
 
-                let yield_data = WaitForIOData {
-                    io_handle: &io_handle,
-                };
+                let yield_data = WaitForIOData(&io_handle);
 
                 // Yield the current task and wait for the FS thread to resume us...
                 self.task_system.yield_current_task(yield_data);
@@ -140,14 +134,15 @@ impl<'task_system> File<'task_system> {
 
                 // Success.
                 if result != 0 {
-                    return Ok(written as usize);
+                    return Ok(written as _);
 
                 // Failure.
                 } else {
                     return Err(io::Error::last_os_error());
                 }
+            // Some actual error.
             } else {
-                return Err(io::Error::from_raw_os_error(error as i32));
+                return Err(io::Error::from_raw_os_error(error as _));
             }
         }
     }
@@ -198,13 +193,13 @@ impl<'task_system> File<'task_system> {
         let mut io_handle = IOHandle::new();
 
         unsafe {
-            io_handle.overlapped.u.s_mut().Offset = offset as u32;
-            io_handle.overlapped.u.s_mut().OffsetHigh = (offset >> 32) as u32;
+            io_handle.overlapped.u.s_mut().Offset = offset as _;
+            io_handle.overlapped.u.s_mut().OffsetHigh = (offset >> 32) as _;
         }
 
-        let len = cmp::min(buf.len(), <DWORD>::max_value() as usize) as DWORD;
+        let len = cmp::min(buf.len(), <DWORD>::max_value() as _) as _;
 
-        let mut read: DWORD = 0;
+        let mut read = 0;
 
         let result = unsafe {
             ReadFile(
@@ -218,7 +213,9 @@ impl<'task_system> File<'task_system> {
 
         // The read completed synchronously.
         if result != 0 {
-            return Ok(read as usize);
+            return Ok(read as _);
+
+        // Else the read either completed asynchronously or there was an error.
         } else {
             let error = unsafe { GetLastError() };
 
@@ -226,9 +223,7 @@ impl<'task_system> File<'task_system> {
             if error == ERROR_IO_PENDING {
                 self.wait_for_io_start(self.file_name(), true);
 
-                let yield_data = WaitForIOData {
-                    io_handle: &io_handle,
-                };
+                let yield_data = WaitForIOData(&io_handle);
 
                 // Yield the current task and wait for the FS thread to resume us...
                 self.task_system.yield_current_task(yield_data);
@@ -247,83 +242,81 @@ impl<'task_system> File<'task_system> {
 
                 // Success.
                 if result != 0 {
-                    return Ok(read as usize);
+                    return Ok(read as _);
 
                 // Failure.
                 } else {
                     return Err(io::Error::last_os_error());
                 }
+            // Some actual error.
             } else {
-                return Err(io::Error::from_raw_os_error(error as i32));
+                return Err(io::Error::from_raw_os_error(error as _));
             }
         }
     }
 
-    fn wait_for_io_start(&self, _file_name: Option<&str>, _read: bool) {
-        #[cfg(any(feature = "tracing", feature = "profiling"))]
-        let _task_name = self.task_system.current_task_name_or_unnamed();
+    #[allow(unused_variables)]
+    fn wait_for_io_start(&self, file_name: Option<&str>, read: bool) {
+        let ctx = self.task_system.thread();
+
+        #[cfg(any(feature = "profiling", feature = "tracing"))]
+        let task_name = ctx.task_name_or_unnamed();
 
         #[cfg(feature = "tracing")]
         {
             let s = format!(
                 "[Wait start] For file {}: `{}` (cur. task: `{}`, thread: `{}`, fiber: `{}`)",
-                _file_name.unwrap_or("<unnamed>"),
-                if _read { "read" } else { "write" },
-                _task_name,
-                self.task_system.thread_name_or_unnamed(),
-                self.task_system.fiber_name_or_unnamed()
+                file_name.unwrap_or("<unnamed>"),
+                if read { "read" } else { "write" },
+                task_name,
+                ctx.name_or_unnamed(),
+                ctx.fiber_name_or_unnamed()
             );
             trace!("{}", s);
         }
 
         #[cfg(feature = "profiling")]
-        {
-            if !self.task_system.is_main_task() {
-                //println!("<<< end_cpu_sample `{}` (pre-wait)", _task_name);
-                self.task_system.profiler_end_scope();
-            }
+        if !ctx.is_main_task() {
+            println!("<<< end_cpu_sample `{}` (pre-wait)", task_name);
+            self.task_system.profiler_end_scope();
         }
     }
 
-    fn wait_for_io_end(&self, _file_name: Option<&str>, _read: bool) {
-        #[cfg(any(feature = "tracing", feature = "profiling"))]
-        let _task_name = self.task_system.current_task_name_or_unnamed();
+    #[allow(unused_variables)]
+    fn wait_for_io_end(&self, file_name: Option<&str>, read: bool) {
+        let ctx = self.task_system.thread();
+
+        #[cfg(any(feature = "profiling", feature = "tracing"))]
+        let task_name = ctx.task_name_or_unnamed();
 
         #[cfg(feature = "tracing")]
         {
             let s = format!(
                 "[Wait end] For file {}: `{}` (cur. task: `{}`, thread: `{}`, fiber: `{}`)",
-                if _read { "read" } else { "write" },
-                _file_name.unwrap_or("<unnamed>"),
-                _task_name,
-                self.task_system.thread_name_or_unnamed(),
-                self.task_system.fiber_name_or_unnamed()
+                if read { "read" } else { "write" },
+                file_name.unwrap_or("<unnamed>"),
+                task_name,
+                ctx.name_or_unnamed(),
+                ctx.fiber_name_or_unnamed()
             );
             trace!("{}", s);
         }
 
         #[cfg(feature = "profiling")]
-        {
-            if !self.task_system.is_main_task() {
-                //println!(">>> begin_cpu_sample `{}` (post-wait)", _task_name);
-                self.task_system.profiler_begin_scope(_task_name);
-            }
+        if !ctx.is_main_task() {
+            println!(">>> begin_cpu_sample `{}` (post-wait)", task_name);
+            self.task_system.profiler_begin_scope(task_name);
         }
     }
 
-    fn new(file: fs::File, task_system: &'task_system TaskSystem, _file_name: String) -> Self {
-        #[cfg(feature = "tracing")]
-        {
-            Self {
-                file,
-                task_system,
-                file_name: _file_name,
-            }
-        }
+    #[allow(unused_variables)]
+    fn new(file: fs::File, task_system: &'ts TaskSystem, file_name: String) -> Self {
+        Self {
+            file,
+            task_system,
 
-        #[cfg(not(feature = "tracing"))]
-        {
-            Self { file, task_system }
+            #[cfg(feature = "tracing")]
+            file_name,
         }
     }
 
@@ -385,17 +378,16 @@ impl OpenOptions {
     }
 
     /// See [`open`](https://doc.rust-lang.org/std/fs/struct.OpenOptions.html#method.open).
-    pub fn open<'task_system, P: AsRef<Path>>(
+    pub fn open<'ts, P: AsRef<Path>>(
         &self,
-        task_system: &'task_system TaskSystem,
+        task_system: &'ts TaskSystem,
         path: P,
-    ) -> io::Result<File<'task_system>> {
+    ) -> io::Result<File<'ts>> {
         let file_name = String::from(path.as_ref().to_str().unwrap());
 
         let file = self.0.open(path)?;
 
-        // Do not notify the IOCP if the operation actually completed synchronously
-        // (e.g., the file was opened for sync IO).
+        // Do not notify the IOCP if the operation actually completed synchronously.
         // Also do not set the file handle / explicit event in `OVERLAPPED` on completion.
         let result = unsafe {
             SetFileCompletionNotificationModes(
@@ -411,16 +403,18 @@ impl OpenOptions {
     }
 }
 
-struct WaitForIOData<'io_handle> {
-    io_handle: &'io_handle IOHandle,
-}
+/// A yield operation representing a wait for async IO completion.
+struct WaitForIOData<'h>(&'h IOHandle);
 
-impl<'fs_handle> YieldData for WaitForIOData<'fs_handle> {
-    fn yield_key(&self) -> NonZeroUsize {
-        NonZeroUsize::new(self.io_handle as *const _ as usize).unwrap()
+impl<'h> YieldData for WaitForIOData<'h> {
+    /// The address on the stack of the `OVERLAPPED` / `IOHandle` struct, associated with the waited-on async IO
+    /// is a perfect `YieldKey` candidate for a wait on the IO handle.
+    fn yield_key(&self) -> YieldKey {
+        unsafe { NonZeroUsize::new_unchecked(self.0 as *const _ as _) }
     }
 
+    /// The wait on the IO handle is complete when its `ready_flag` is set by the IOCP thread.
     fn is_complete(&self) -> bool {
-        self.io_handle.ready_flag.load(Ordering::SeqCst)
+        self.0.ready_flag.load(Ordering::Acquire)
     }
 }

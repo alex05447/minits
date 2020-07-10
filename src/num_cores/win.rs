@@ -1,20 +1,23 @@
-use std::mem;
-use std::ptr;
-use std::sync::Once;
-
-use winapi::shared::winerror::ERROR_INSUFFICIENT_BUFFER;
-use winapi::um::errhandlingapi::GetLastError;
-use winapi::um::sysinfoapi::{GetLogicalProcessorInformation, GetSystemInfo, SYSTEM_INFO};
-use winapi::um::winnt::{RelationProcessorCore, SYSTEM_LOGICAL_PROCESSOR_INFORMATION};
+use {
+    std::{mem, ptr, sync::Once},
+    winapi::{
+        shared::winerror::ERROR_INSUFFICIENT_BUFFER,
+        um::{
+            errhandlingapi::GetLastError,
+            sysinfoapi::{GetLogicalProcessorInformation, GetSystemInfo, SYSTEM_INFO},
+            winnt::{RelationProcessorCore, SYSTEM_LOGICAL_PROCESSOR_INFORMATION},
+        },
+    },
+};
 
 /// Returns the number of system's logical processors.
-pub fn get_num_logical_cores() -> usize {
-    static mut NUM_LOGICAL_CORES: usize = 1;
+pub fn get_num_logical_cores() -> u32 {
+    static mut NUM_LOGICAL_CORES: u32 = 1;
     static INIT_NUM_LOGICAL_CORES: Once = Once::new();
 
     unsafe {
         INIT_NUM_LOGICAL_CORES.call_once(|| {
-            NUM_LOGICAL_CORES = get_num_logical_cores_internal();
+            NUM_LOGICAL_CORES = get_num_logical_cores_impl();
         });
 
         NUM_LOGICAL_CORES
@@ -22,30 +25,30 @@ pub fn get_num_logical_cores() -> usize {
 }
 
 /// Returns the number of system's physical processors.
-pub fn get_num_physical_cores() -> usize {
-    static mut NUM_PHYSICAL_CORES: usize = 1;
+pub fn get_num_physical_cores() -> u32 {
+    static mut NUM_PHYSICAL_CORES: u32 = 1;
     static INIT_NUM_PHYSICAL_CORES: Once = Once::new();
 
     unsafe {
         INIT_NUM_PHYSICAL_CORES.call_once(|| {
-            NUM_PHYSICAL_CORES = get_num_physical_cores_internal();
+            NUM_PHYSICAL_CORES = get_num_physical_cores_impl();
         });
 
         NUM_PHYSICAL_CORES
     }
 }
 
-fn get_num_logical_cores_internal() -> usize {
+fn get_num_logical_cores_impl() -> u32 {
     let mut system_info: SYSTEM_INFO = unsafe { mem::zeroed() };
 
     unsafe {
         GetSystemInfo(&mut system_info);
     }
 
-    system_info.dwNumberOfProcessors as usize
+    system_info.dwNumberOfProcessors
 }
 
-fn get_num_physical_cores_internal() -> usize {
+fn get_num_physical_cores_impl() -> u32 {
     let mut buffer_size = 0;
 
     let result =
@@ -60,7 +63,8 @@ fn get_num_physical_cores_internal() -> usize {
         || buffer_size < struct_size
         || buffer_size % buffer_size != 0
     {
-        panic!("Failed to get the number of physical cores.");
+        //panic!("failed to get the number of physical cores");
+        return 1;
     }
 
     let num_structs = buffer_size / struct_size;
@@ -71,7 +75,8 @@ fn get_num_physical_cores_internal() -> usize {
         unsafe { GetLogicalProcessorInformation(structs.as_mut_ptr(), &mut buffer_size) as usize };
 
     if result == 0 {
-        panic!("Failed to get the number of physical cores.");
+        //panic!("failed to get the number of physical cores");
+        return 1;
     }
 
     unsafe {
@@ -83,5 +88,5 @@ fn get_num_physical_cores_internal() -> usize {
         .filter(|info| info.Relationship == RelationProcessorCore)
         .count();
 
-    num_physical_cores
+    num_physical_cores as u32
 }

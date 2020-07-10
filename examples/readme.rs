@@ -1,5 +1,11 @@
-use std::mem;
-use std::sync::atomic::{AtomicU32, Ordering};
+use {
+    minithreadlocal::ThreadLocal,
+    minits,
+    std::{
+        mem,
+        sync::atomic::{AtomicU32, Ordering},
+    },
+};
 
 #[cfg(feature = "asyncio")]
 use std::fs;
@@ -12,10 +18,6 @@ extern crate log;
 
 #[cfg(feature = "tracing")]
 extern crate env_logger;
-
-use minits;
-
-use minithreadlocal::ThreadLocal;
 
 #[cfg(feature = "tracing")]
 fn setup_logger() {
@@ -36,12 +38,13 @@ fn main() {
     setup_logger();
 
     // Default task system parameters:
+    //
     // spawn a worker thread per physical core less one,
     // 1 Mb of stack per worker thread/fiber,
     // 4 fibers per thread,
     // allow inline tasks.
 
-    //let builder = minits::TaskSystemBuilder::new();
+    // let builder = minits::TaskSystemBuilder::new();
 
     // Equivalent to:
 
@@ -62,23 +65,21 @@ fn main() {
     // The closures are passed the worker thread index in range `1 ..= num_worker_threads`.
 
     // E.g. we may initialize some thread-local data.
-    let mut thread_local = ThreadLocal::<usize>::new();
+    let mut thread_local = ThreadLocal::<u32>::new().unwrap();
 
-    let thread_init = move |thread_index: usize| {
+    let thread_init = move |thread_index: u32| {
         println!("Hi from thread {}!", thread_index);
 
-        thread_local.store(thread_index);
+        thread_local.store(thread_index).unwrap();
     };
 
-    let thread_fini = move |thread_index: usize| {
+    let thread_fini = move |thread_index: u32| {
         println!("Bye from thread {}!", thread_index);
 
-        assert_eq!(thread_local.take(), thread_index);
+        assert_eq!(thread_local.take().unwrap().unwrap(), thread_index);
     };
 
-    let builder = builder
-        .thread_init(thread_init)
-        .thread_fini(thread_fini);
+    let builder = builder.thread_init(thread_init).thread_fini(thread_fini);
 
     // Initializes the global task system singleton.
     // Call once before the task system needs to be used,
@@ -95,22 +96,24 @@ fn main() {
         let mut mutable_borrow = false;
         let mut another_mutable_borrow = "Hello".to_owned();
 
-        // Creates a `TaskScope` object through which tasks may be added to the task system.
+        // Capturing a large object by value will require a dynamic memory allocation,
+        // but smaller closures won't have this overhead.
+        let big_capture = [7u8; 64];
+
+        // Creates a `Scope` object through which tasks may be added to the task system.
         // Any borrows must live longer than this scope.
         // This means that either
         // 1) all borrows must be declared above the `scope`, as they are here, or
         // 2) scope must be explicitly dropped before any of the borrows are.
         // Scope names require "task_names" feature.
-        let handle = minits::task_system().handle();
-        let mut scope = minits::task_system().scope_named(&handle, "My task scope");
+        minits::task_scope_named!(scope, "My task scope".to_owned());
 
         // This adds a task to the task system.
         // A task is just a closure that takes a `&TaskSystem` argument and returns nothing.
         // It may run in any of the worker threads at any point during
         // or after the call to this function.
-        scope.task_named(
-            "My task", // Task names require "task_names" feature.
-            |task_system| {
+        scope
+            .task(|task_system| {
                 // You can use the `task_system` to spawn nested tasks
                 // (or use the global singleton if you initialized it).
 
@@ -133,59 +136,66 @@ fn main() {
                 assert!(!mutable_borrow);
                 mutable_borrow = true;
 
-                // You may spawn tasks from within tasks.
-                let handle = task_system.handle();
-                let mut scope = task_system.scope_named(&handle, "Nested task scope");
+                // You may spawn tasks from within tasks using nested `Scope`'s.
+                minits::task_scope_named!(scope, "Nested task scope".to_owned(), task_system);
 
-                scope.task_named("Nested task", |_task_system| {
-                    // More nested tasks.
-                    #[cfg(feature = "task_names")]
-                    {
-                        let scope_name = task_system.scope_name().unwrap();
-                        assert_eq!(scope_name, "Nested task scope");
-                        let task_name = task_system.task_name().unwrap();
-                        assert_eq!(task_name, "Nested task");
-                    }
+                scope
+                    .task(|_task_system| {
+                        // More nested tasks.
+                        #[cfg(feature = "task_names")]
+                        {
+                            let scope_name = _task_system.scope_name().unwrap();
+                            assert_eq!(scope_name, "Nested task scope");
+                            let task_name = _task_system.task_name().unwrap();
+                            assert_eq!(task_name, "Nested task");
+                        }
 
-                    // Same as above.
-                    assert_eq!(immutable_borrow, "I'm an immutably borrowed string.");
+                        // Same as above.
+                        assert_eq!(immutable_borrow, "I'm an immutably borrowed string.");
 
-                    // Same as above - only one mutable borrow allowed.
-                    another_mutable_borrow.push_str(" world!");
-                });
+                        // Same as above - only one mutable borrow allowed.
+                        another_mutable_borrow.push_str(" world!");
+                    })
+                    .name("Nested task");
 
                 // Works with function pointers too, but passing arguments is harder.
-                fn simple_task(_task_system: &minits::TaskSystem) {
+                fn simple_task(_: &minits::TaskSystem) {
                     println!("Hi, I'm a simple function.");
                 }
 
                 scope.task(simple_task);
 
+                scope.task(move |_| {
+                    println!("Task with a large ({}b) capture.", big_capture.len());
+                });
+
                 // The current task completes when its closure returns, which
-                // includes waiting for all nested tasks to complete.
-            },
-        );
+                // includes waiting for all the nested tasks to complete.
+            })
+            .name("My task"); // Task names require "task_names" feature.
 
         // Parallel-for example:
         let sum_parallel = AtomicU32::new(0);
 
-        scope.task_range_named(
-            "My very own parallel-for",
-            // The range to split.
-            0..32,
+        scope
+            .task_range(
+                // The range to split.
+                0..32,
+                // Function to call on each range chunk.
+                // Takes a `range` argument which corresponds to the invocation's chunk.
+                // The closure must be clonable because it IS cloned to each chunk.
+                // Second argument is `&TaskSystem`.
+                |range, _| {
+                    let local_sum = range.fold(0, |sum, val| sum + val);
+                    sum_parallel.fetch_add(local_sum, Ordering::SeqCst);
+                },
+            )
             // Split into `1` * `num_threads` chunks.
             // More chunks means better load-balancing, but more
             // task system overhead.
-            1,
-            // Function to call on each range chunk.
-            // Takes a `range` argument which corresponds to the invocation's chunk.
-            // The closure must be clonable because it IS cloned to each chunk.
-            |range, _| {
-                // Second argument is `&TaskSystem`.
-                let local_sum = range.fold(0, |sum, val| sum + val);
-                sum_parallel.fetch_add(local_sum, Ordering::SeqCst);
-            },
-        );
+            .multiplier(1)
+            .name("My very own parallel-for");
+
         // Implementation uses recursive range subdivision with forking
         // to achieve maximum CPU utilisation
 
@@ -230,7 +240,7 @@ fn main() {
                 assert_eq!(bytes_written, write_data.len());
             }
             Err(err) => {
-                panic!("Write failed: {}", err);
+                panic!("async write failed: {}", err);
             }
         }
 
@@ -247,7 +257,7 @@ fn main() {
                 assert_eq!(read_data, *write_data);
             }
             Err(err) => {
-                panic!("Read failed: {}", err);
+                panic!("async read failed: {}", err);
             }
         }
 
@@ -258,10 +268,11 @@ fn main() {
                 assert_eq!(bytes_read, *write_data);
             }
             Err(err) => {
-                panic!("Read failed: {}", err);
+                panic!("async read failed: {}", err);
             }
         }
 
+        // Clean up the file.
         fs::remove_file(file_name).unwrap();
     }
 
@@ -273,5 +284,7 @@ fn main() {
     // Do not use the task system past this point.
 
     // Don't forget to clean up the `ThreadLocal` object.
-    thread_local.free_index();
+    thread_local.free_index().unwrap();
+
+    // The task system may be initialized again, if so desired, with any parameters.
 }

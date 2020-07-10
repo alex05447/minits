@@ -10,18 +10,18 @@ pub trait Profiler {
     fn end_scope(&self);
 }
 
-pub fn profiler_scope<'a>(profiler: &'a dyn Profiler, name: &str) -> ProfilerScope<'a> {
+pub fn profiler_scope<'p>(profiler: &'p dyn Profiler, name: &str) -> ProfilerScope<'p> {
     profiler.begin_scope(name);
 
-    ProfilerScope { profiler }
+    ProfilerScope(profiler)
 }
 
-pub struct ProfilerScope<'a> {
-    profiler: &'a dyn Profiler,
-}
+pub struct ProfilerScope<'a>(&'a dyn Profiler);
 
 impl<'a> Drop for ProfilerScope<'a> {
     fn drop(&mut self) {
-        self.profiler.end_scope();
+        self.0.end_scope();
     }
 }
+
+pub type TaskSystemProfiler = dyn Profiler + Send + Sync;

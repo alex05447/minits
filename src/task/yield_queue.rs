@@ -1,71 +1,74 @@
-use std::num::NonZeroUsize;
+use {
+    super::{task::Task, task_system::YieldKey},
+    minifiber::Fiber,
+};
 
-use super::task_context::TaskContext;
-
-use minifiber::Fiber;
-
-pub(super) struct FiberAndTask {
-    pub(super) fiber: Fiber,
-    pub(super) task: TaskContext,
+/// A pair of task context / its fiber,
+/// added to the `YieldQueue` when yielded,
+/// removed from the `YieldQueue` when resumed.
+pub(crate) struct TaskAndFiber {
+    pub(crate) task: Task,
+    pub(crate) fiber: Fiber,
 }
 
 enum YieldStatus {
-    NotReady, // Pushed to the yield queue but may not be switched to yet.
-    Ready,    // May be picked up and switched to.
+    /// Pushed to the yield queue, but may not be switched to yet.
+    NotReady,
+    /// May be picked up and switched to.
+    Ready,
 }
 
-pub(super) struct YieldQueue {
-    fibers_and_tasks: Vec<FiberAndTask>,
-    keys: Vec<NonZeroUsize>,
+/// Contains yielded task contexts, their fibers and yield keys.
+pub(crate) struct YieldQueue {
+    tasks: Vec<TaskAndFiber>,
+    keys: Vec<YieldKey>,
     statuses: Vec<YieldStatus>,
 }
 
 impl YieldQueue {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            fibers_and_tasks: Vec::new(),
+            tasks: Vec::new(),
             keys: Vec::new(),
             statuses: Vec::new(),
         }
     }
 
-    pub(super) fn yield_fiber_and_task(
-        &mut self,
-        fiber_and_task: FiberAndTask,
-        yield_key: NonZeroUsize,
-    ) {
-        self.fibers_and_tasks.push(fiber_and_task);
+    /// Add a yielded task and its fiber to the yield queue with the `yield_key`,
+    /// with the `NotReady` status.
+    pub(crate) fn yield_task(&mut self, task: TaskAndFiber, yield_key: YieldKey) {
+        self.tasks.push(task);
+        debug_assert!(!self.keys.contains(&yield_key), "non-unique yield key");
         self.keys.push(yield_key);
         self.statuses.push(YieldStatus::NotReady)
     }
 
-    pub(super) fn try_resume_fiber_and_task(
-        &mut self,
-        yield_key: NonZeroUsize,
-    ) -> Option<FiberAndTask> {
-        if let Some(idx) = self.keys.iter().position(|y| *y == yield_key) {
-            let status = &mut self.statuses[idx];
+    /// Try to resume a `Ready` task and its fiber with the `yield_key`,
+    /// or mark a `NotReady` task with the `yield_key` as now `Ready`.
+    pub(crate) fn try_resume_task(&mut self, yield_key: YieldKey) -> Option<TaskAndFiber> {
+        self.keys
+            .iter()
+            .position(|y| *y == yield_key)
+            .and_then(|idx| {
+                let status = unsafe { self.statuses.get_unchecked_mut(idx) };
 
-            match status {
-                // Fiber was yielded but is not ready to be switched to.
-                // We signal the yielding thread that the fiber is ready to be resumed.
-                YieldStatus::NotReady => {
-                    *status = YieldStatus::Ready;
-                    None
+                match status {
+                    // Fiber was yielded but is not ready to be switched to.
+                    // We signal the yielding thread that the fiber is ready to be resumed.
+                    YieldStatus::NotReady => {
+                        *status = YieldStatus::Ready;
+                        None
+                    }
+
+                    // Fiber was yielded and is ready to be switched to - remove and return it.
+                    YieldStatus::Ready => {
+                        let task = self.tasks.swap_remove(idx);
+                        self.keys.swap_remove(idx);
+                        self.statuses.swap_remove(idx);
+                        Some(task)
+                    }
                 }
-
-                // Fiber was yielded and is ready to be switched to - erase and return it.
-                YieldStatus::Ready => {
-                    let fiber_and_task = self.fibers_and_tasks.swap_remove(idx);
-                    self.keys.swap_remove(idx);
-                    self.statuses.swap_remove(idx);
-                    Some(fiber_and_task)
-                }
-            }
-
-        // No fiber was yielded with this key yet.
-        } else {
-            None
-        }
+            })
+        // Else no fiber was yielded with this yield key yet.
     }
 }
