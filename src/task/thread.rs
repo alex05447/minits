@@ -1,8 +1,11 @@
 use {
-    super::{task::Task, task_system::YieldKey},
-    crate::{Handle, TaskSystem, ThreadInitFiniCallback},
+    super::{task::Task, task_system::YieldKey, yield_queue::TaskAndFiber},
+    crate::{Handle, PanicPayload, TaskSystem, ThreadInitFiniCallback},
     minifiber::Fiber,
-    std::sync::Arc,
+    std::{
+        panic::{catch_unwind, AssertUnwindSafe},
+        sync::Arc,
+    },
 };
 
 /// Per-thread task system state.
@@ -12,8 +15,8 @@ pub(crate) struct Thread {
     /// Worker threads - `1 ..= num_worker_threads`.
     index: u32,
 
-    /// Thread name for tracing / debugging, initiated on thread startup.
-    #[cfg(feature = "tracing")]
+    /// Thread name for logging / debugging, initiated on thread startup.
+    #[cfg(feature = "logging")]
     name: Option<String>,
 
     /// If we're using fibers, it's important to switch back to the fiber
@@ -48,7 +51,7 @@ impl Thread {
         Self {
             index,
 
-            #[cfg(feature = "tracing")]
+            #[cfg(feature = "logging")]
             name: name.into(),
 
             thread_fiber: None,
@@ -72,12 +75,17 @@ impl Thread {
         self.index
     }
 
-    #[cfg(feature = "tracing")]
     pub(crate) fn name_or_unnamed(&self) -> &str {
-        self.name
-            .as_ref()
-            .map(|s| s.as_str())
-            .unwrap_or("<unnamed>")
+        #[cfg(feature = "logging")]
+        {
+            self.name
+                .as_ref()
+                .map(|s| s.as_str())
+                .unwrap_or("<unnamed>")
+        }
+
+        #[cfg(not(feature = "logging"))]
+        "<unnamed>"
     }
 
     pub(crate) fn set_thread_fiber(&mut self, fiber: Fiber) {
@@ -97,7 +105,6 @@ impl Thread {
         // <<<<<<<< FIBER SWITCH <<<<<<<<
     }
 
-    #[cfg(feature = "tracing")]
     pub(crate) fn fiber_name_or_unnamed(&self) -> &str {
         self.fiber
             .as_ref()
@@ -139,7 +146,11 @@ impl Thread {
 
     /// Set the thread's current task and execute it.
     /// The task may yield if we're using fibers.
-    pub(crate) fn execute_task(&mut self, mut task: Task, task_system: &TaskSystem) {
+    pub(crate) fn execute_task(
+        &mut self,
+        mut task: Task,
+        task_system: &TaskSystem,
+    ) -> Result<(), PanicPayload> {
         // Extract the task closure from the task context so that it lives on the fiber stack here.
         debug_assert!(!task.is_none());
         let mut closure = task.take_task();
@@ -151,9 +162,11 @@ impl Thread {
 
         // Call the task closure, passing it the task system.
         // The task may yield.
-        // >>>>>>>> (POTENTIAL) FIBER SWITCH >>>>>>>>
-        unsafe { closure.execute_once_unchecked(task_system) };
-        // <<<<<<<< (POTENTIAL) FIBER SWITCH <<<<<<<<
+        catch_unwind(AssertUnwindSafe(|| {
+            // >>>>>>>> (POTENTIAL) FIBER SWITCH >>>>>>>>
+            unsafe { closure.execute_once_unchecked(task_system) };
+            // <<<<<<<< (POTENTIAL) FIBER SWITCH <<<<<<<<
+        }))
         // The task is finished.
         // We might be in a different thread if the task yielded.
     }
@@ -171,16 +184,23 @@ impl Thread {
         self.task.take().expect("current task not set")
     }
 
+    pub(crate) fn take_task_and_fiber(&mut self) -> TaskAndFiber {
+        TaskAndFiber {
+            task: self.task.take().expect("current task not set"),
+            fiber: self.fiber.take().expect("current fiber not set"),
+        }
+    }
+
     pub(crate) fn task_name(&self) -> Option<&str> {
         self.task().task_name()
     }
 
-    #[cfg(any(feature = "tracing", feature = "profiling"))]
+    #[cfg(any(feature = "logging", feature = "profiling"))]
     pub(crate) fn task_name_or_unnamed(&self) -> &str {
         self.task().task_name_or_unnamed()
     }
 
-    #[cfg(feature = "tracing")]
+    #[cfg(feature = "logging")]
     pub(crate) fn scope_name_or_unnamed(&self) -> &str {
         self.task().scope_name_or_unnamed()
     }

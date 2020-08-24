@@ -10,16 +10,16 @@ use {
 #[cfg(feature = "asyncio")]
 use std::fs;
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 use std::{io::Write, sync::Once};
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 extern crate log;
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 extern crate env_logger;
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 fn setup_logger() {
     static INIT: Once = Once::new();
 
@@ -34,7 +34,7 @@ fn setup_logger() {
 }
 
 fn main() {
-    #[cfg(feature = "tracing")]
+    #[cfg(feature = "logging")]
     setup_logger();
 
     // Default task system parameters:
@@ -49,7 +49,7 @@ fn main() {
     // Equivalent to:
 
     let num_cores = minits::get_num_physical_cores().max(1);
-    let num_worker_threads = num_cores - 1;
+    let num_worker_threads = 0; //num_cores - 1;
     let num_fibers = num_cores * 4;
     let allow_inline_tasks = true;
     let fiber_stack_size = 1024 * 1024;
@@ -113,20 +113,17 @@ fn main() {
         // It may run in any of the worker threads at any point during
         // or after the call to this function.
         scope
-            .task(|task_system| {
-                // You can use the `task_system` to spawn nested tasks
+            .task(|ts| {
+                // You can use the `ts` to spawn nested tasks
                 // (or use the global singleton if you initialized it).
 
                 // This code will run in the worker thread.
 
                 // You may access the task and scope names within the task body
                 // (if "task_names" feature is enabled).
-                #[cfg(feature = "task_names")]
-                {
-                    let scope_name = task_system.scope_name().unwrap();
-                    assert_eq!(scope_name, "My task scope");
-                    let task_name = task_system.task_name().unwrap();
-                    assert_eq!(task_name, "My task");
+                if cfg!(feature = "task_names") {
+                    assert_eq!(ts.scope_name().unwrap(), "My task scope");
+                    assert_eq!(ts.task_name().unwrap(), "My task");
                 }
 
                 // You may use immutable borrows of values on the spawning stack.
@@ -137,17 +134,13 @@ fn main() {
                 mutable_borrow = true;
 
                 // You may spawn tasks from within tasks using nested `Scope`'s.
-                minits::task_scope_named!(scope, "Nested task scope".to_owned(), task_system);
+                minits::task_scope_named!(scope, "Nested task scope".to_owned(), ts);
 
                 scope
-                    .task(|_task_system| {
-                        // More nested tasks.
-                        #[cfg(feature = "task_names")]
-                        {
-                            let scope_name = _task_system.scope_name().unwrap();
-                            assert_eq!(scope_name, "Nested task scope");
-                            let task_name = _task_system.task_name().unwrap();
-                            assert_eq!(task_name, "Nested task");
+                    .task(|ts| {
+                        if cfg!(feature = "task_names") {
+                            assert_eq!(ts.scope_name().unwrap(), "Nested task scope");
+                            assert_eq!(ts.task_name().unwrap(), "Nested task");
                         }
 
                         // Same as above.
@@ -155,6 +148,21 @@ fn main() {
 
                         // Same as above - only one mutable borrow allowed.
                         another_mutable_borrow.push_str(" world!");
+
+                        // Spawn another nested task which will panic.
+                        minits::task_scope_named!(scope, "Panicking task scope".to_owned(), ts);
+
+                        scope.task(|_| {
+                            panic!("foo");
+                        });
+
+                        // Consumes the scope, waiting for the associated task to complete
+                        // and returning any panics (only one panic in this case).
+                        // If we would just drop the scope, it would print the caught panic in the task
+                        // and re-throw it, panicking in our application.
+                        if let Err(panics) = scope.wait() {
+                            println!("{}", panics);
+                        }
                     })
                     .name("Nested task");
 
@@ -233,7 +241,7 @@ fn main() {
 
         let write_data = b"asdf 1234";
 
-        // Write some data. The current task (/fiber, if any) will yield if the
+        // Write some data. The current task (or fiber, if any) will yield if the
         // operation does not complete synchronously.
         match file.write(write_data) {
             Ok(bytes_written) => {
@@ -249,6 +257,7 @@ fn main() {
         let file = minits::File::open(minits::task_system(), file_name).unwrap();
 
         let mut read_data = [0u8; 9];
+        assert_eq!(read_data.len(), write_data.len());
 
         // Read `read_data.len()` bytes from the file start.
         match file.read(&mut read_data) {

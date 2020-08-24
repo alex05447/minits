@@ -66,7 +66,7 @@ fn main() {
     let thread_fini = move |thread_index: u32| {
         println!("Bye from thread {}!", thread_index);
 
-        assert_eq!(thread_local.take(), thread_index);
+        assert_eq!(thread_local.take().unwrap().unwrap(), thread_index);
     };
 
     let builder = builder
@@ -105,20 +105,17 @@ fn main() {
         // It may run in any of the worker threads at any point during
         // or after the call to this function.
         scope
-            .task(|task_system| {
-                // You can use the `task_system` to spawn nested tasks
+            .task(|ts| {
+                // You can use the `ts` to spawn nested tasks
                 // (or use the global singleton if you initialized it).
 
                 // This code will run in the worker thread.
 
                 // You may access the task and scope names within the task body
                 // (if "task_names" feature is enabled).
-                #[cfg(feature = "task_names")]
-                {
-                    let scope_name = task_system.scope_name().unwrap();
-                    assert_eq!(scope_name, "My task scope");
-                    let task_name = task_system.task_name().unwrap();
-                    assert_eq!(task_name, "My task");
+                if cfg!(feature = "task_names") {
+                    assert_eq!(ts.scope_name().unwrap(), "My task scope");
+                    assert_eq!(ts.task_name().unwrap(), "My task");
                 }
 
                 // You may use immutable borrows of values on the spawning stack.
@@ -129,17 +126,14 @@ fn main() {
                 mutable_borrow = true;
 
                 // You may spawn tasks from within tasks using nested `Scope`'s.
-                minits::task_scope_named!(scope, "Nested task scope".to_owned(), task_system);
+                minits::task_scope_named!(scope, "Nested task scope".to_owned(), ts);
 
                 scope
-                    .task(|_task_system| {
+                    .task(|ts| {
                         // More nested tasks.
-                        #[cfg(feature = "task_names")]
-                        {
-                            let scope_name = task_system.scope_name().unwrap();
-                            assert_eq!(scope_name, "Nested task scope");
-                            let task_name = task_system.task_name().unwrap();
-                            assert_eq!(task_name, "Nested task");
+                        if cfg!(feature = "task_names") {
+                            assert_eq!(ts.scope_name().unwrap(), "Nested task scope");
+                            assert_eq!(ts.task_name().unwrap(), "Nested task");
                         }
 
                         // Same as above.
@@ -147,6 +141,25 @@ fn main() {
 
                         // Same as above - only one mutable borrow allowed.
                         another_mutable_borrow.push_str(" world!");
+
+                        // Spawn another nested task which will panic.
+                        minits::task_scope_named!(
+                            scope,
+                            "Panicking task scope".to_owned(),
+                            ts
+                        );
+
+                        scope.task(|_| {
+                            panic!("foo");
+                        });
+
+                        // Consumes the scope, waiting for the associated task to complete
+                        // and returning any panics (only one panic in this case).
+                        // If we would just drop the scope, it would print the caught panic in the task
+                        // and re-throw it, panicking in our application.
+                        if let Err(panics) = scope.wait() {
+                            println!("{}", panics);
+                        }
                     })
                     .name("Nested task");
 
@@ -225,7 +238,7 @@ fn main() {
 
         let write_data = b"asdf 1234";
 
-        // Write some data. The current task (/fiber, if any) will yield if the
+        // Write some data. The current task (or fiber, if any) will yield if the
         // operation does not complete synchronously.
         match file.write(write_data) {
             Ok(bytes_written) => {
@@ -241,6 +254,7 @@ fn main() {
         let file = minits::File::open(minits::task_system(), file_name).unwrap();
 
         let mut read_data = [0u8; 9];
+        assert_eq!(read_data.len(), write_data.len());
 
         // Read `read_data.len()` bytes from the file start.
         match file.read(&mut read_data) {
@@ -287,9 +301,9 @@ fn main() {
 
 Most of these are just for debugging:
 
-- `"task_names"` - task and task scope names are stored in each individual task. Useful for tracing / debugging. May decrease the amount of memory available for closure captures.
+- `"task_names"` - task and task scope names are stored in each individual task. Useful for logging / debugging. May decrease the amount of memory available for closure captures.
 
-- `"tracing"` - uses the `log` crate to `trace!` task addition/execution/waiting/resuming/competion. Useful for debugging. Works with `"task_names"` above. Usual `log` crate integration rules apply - e.g., initialize `env_logger` at the start of your application to see the `trace!` output.
+- `"logging"` - uses the `log` crate to `trace!` task addition/execution/waiting/resuming/competion. Useful for debugging. Works with `"task_names"` above. Usual `log` crate integration rules apply - e.g., initialize `env_logger` at the start of your application to see the `trace!` output.
 
 - `"profiling"` - enables the `Profiler` trait and the `TaskSystemBuilder::set_profiler()` method to allow installing a profiler trait object. Useful for debugging. Works with `"task_names"`. See the documentation for `Profiler` for more info.
 
@@ -335,7 +349,7 @@ Actual features:
 ## Dependencies
 
 - [`winapi`](https://docs.rs/winapi/*/winapi/) via crates.io.
-- If `"tracing"` feature is enabled, [`log`](https://docs.rs/log/*/log/) via crates.io.
+- If `"logging"` feature is enabled, [`log`](https://docs.rs/log/*/log/) via crates.io.
 - Win32 primitive wrappers via [`minifiber`](https://github.com/alex05447/minifiber), [`minithreadlocal`](https://github.com/alex05447/minithreadlocal) as path dependencies (TODO - github dependency?).
 - If `"remotery"` feature is enabled, `remotery` wrapper via [`miniremotery`](`https://github.com/alex05447/miniremotery`) as a path dependency (TODO - github dependency?).
 - If `"asyncio"` feature is enabled, Win32 IO completion port wrapper via [`miniiocp`](https://github.com/alex05447/miniiocp) as a path dependency (TODO - github dependency?).

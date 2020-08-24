@@ -1,6 +1,6 @@
 use {
-    super::{task::Task, task_system::YieldKey, yield_queue::TaskAndFiber},
-    crate::{Handle, TaskRange, TaskSystem},
+    super::{panic::fmt_panic, task::Task, task_system::YieldKey, yield_queue::TaskAndFiber},
+    crate::{Handle, PanicPayload, TaskRange, TaskSystem},
 };
 
 impl TaskSystem {
@@ -9,7 +9,7 @@ impl TaskSystem {
         let h: &Handle = &task.handle;
 
         let s = format!(
-            "[Added] Task: `{}`, scope: `{}` [{:p} <{}>] (cur. task: `{}`, scope: `{}` [{:p} <{}>], thread: `{}`, fiber: `{}`)",
+            "[Added] Task: '{}', scope: '{}' [{:p} <{}>] (cur. task: '{}', scope: '{}' [{:p} <{}>], thread: '{}', fiber: '{}')",
             task.task_name_or_unnamed(),
             task.scope_name_or_unnamed(),
             h,
@@ -24,14 +24,18 @@ impl TaskSystem {
         trace!("{}", s);
     }
 
-    pub(crate) fn trace_picked_up_task(&self, task: &Task) {
+    pub(crate) fn trace_picked_up_task(
+        &self,
+        h: &Handle,
+        task_name: Option<&str>,
+        scope_name: Option<&str>,
+    ) {
         let ctx = self.thread();
-        let h: &Handle = &task.handle;
 
         let s = format!(
-            "[Picked up new] Task: `{}`, scope: `{}` [{:p} <{}>], by thread: `{}`, fiber: `{}`",
-            task.task_name_or_unnamed(),
-            task.scope_name_or_unnamed(),
+            "[Picked up new] Task: '{}', scope: '{}' [{:p} <{}>], by thread: '{}', fiber: '{}'",
+            task_name.unwrap_or("<unnamed>"),
+            scope_name.unwrap_or("<unnamed>"),
             h,
             h.load(),
             ctx.name_or_unnamed(),
@@ -44,7 +48,7 @@ impl TaskSystem {
         let ctx = self.thread();
 
         let s = format!(
-            "[Wait start] For scope: `{}` [{:p} <{}>] (cur. task: `{}`, scope: `{}` [{:p} <{}>], thread: `{}`, fiber: `{}`)",
+            "[Wait start] For scope: '{}' [{:p} <{}>] (cur. task: '{}', scope: '{}' [{:p} <{}>], thread: '{}', fiber: '{}')",
             scope_name.unwrap_or("<unnamed>"),
             h,
             h.load(),
@@ -62,7 +66,7 @@ impl TaskSystem {
         let ctx = self.thread();
 
         let s = format!(
-            "[Wait end] For scope: `{}` [{:p}] (cur. task: `{}`, scope: `{}` [{:p} <{}>], thread: `{}`, fiber: `{}`)",
+            "[Wait end] For scope: '{}' [{:p}] (cur. task: '{}', scope: '{}' [{:p} <{}>], thread: '{}', fiber: '{}')",
             scope_name.unwrap_or("<unnamed>"),
             h,
             ctx.task_name_or_unnamed(),
@@ -82,7 +86,7 @@ impl TaskSystem {
         let yield_key: *const () = yield_key.get() as _;
 
         let s = format!(
-            "[Yielded] Task: `{}`, scope: `{}` [{:p} <{}>], fiber `{}`, waiting for [{:p}], by thread: `{}`"
+            "[Yielded] Task: '{}', scope: '{}' [{:p} <{}>], fiber '{}', waiting for [{:p}], by thread: '{}'"
             ,task.task.task_name_or_unnamed()
             ,task.task.scope_name_or_unnamed()
             ,h
@@ -101,7 +105,7 @@ impl TaskSystem {
         let yield_key: *const () = yield_key.get() as _;
 
         let s = format!(
-            "[Resumed] Task: `{}`, scope: `{}` [{:p} <{}>], fiber `{}`, waited for [{:p}], by thread: `{}`, fiber: `{}`"
+            "[Resumed] Task: '{}', scope: '{}' [{:p} <{}>], fiber '{}', waited for [{:p}], by thread: '{}', fiber: '{}'"
             ,task.task.task_name_or_unnamed()
             ,task.task.scope_name_or_unnamed()
             ,h
@@ -119,7 +123,7 @@ impl TaskSystem {
         let h: &Handle = &task.task.handle;
 
         let s = format!(
-            "[Picked up resumed] Task: `{}`, scope: `{}` [{:p} <{}>], fiber `{}`, by thread: `{}`, fiber: `{}`",
+            "[Picked up resumed] Task: '{}', scope: '{}' [{:p} <{}>], fiber '{}', by thread: '{}', fiber: '{}'",
             task.task.task_name_or_unnamed(),
             task.task.scope_name_or_unnamed(),
             h,
@@ -131,19 +135,39 @@ impl TaskSystem {
         trace!("{}", s);
     }
 
-    pub(crate) fn trace_finished_task(&self, task: &Task) {
+    pub(crate) fn trace_finished_task(
+        &self,
+        h: &Handle,
+        task_name: Option<&str>,
+        scope_name: Option<&str>,
+        panic: &Option<PanicPayload>,
+    ) {
         let ctx = self.thread();
-        let h: &Handle = &task.handle;
 
-        let s = format!(
-            "[Finished] Task: `{}`, scope: `{}` [{:p} <{}>], by thread: `{}`, fiber: `{}`",
-            task.task_name_or_unnamed(),
-            task.scope_name_or_unnamed(),
-            h,
-            h.load(),
-            ctx.name_or_unnamed(),
-            ctx.fiber_name_or_unnamed()
-        );
+        let s = if let Some(panic) = panic {
+            let mut s = format!(
+                "[Panicked] Task: '{}', scope: '{}' [{:p} <{}>], in thread: '{}', fiber: '{}'",
+                task_name.unwrap_or("<unnamed>"),
+                scope_name.unwrap_or("<unnamed>"),
+                h,
+                h.load() - 1,
+                ctx.name_or_unnamed(),
+                ctx.fiber_name_or_unnamed(),
+            );
+            fmt_panic(&mut s, panic, 0).unwrap();
+            s
+        } else {
+            format!(
+                "[Finished] Task: '{}', scope: '{}' [{:p} <{}>], by thread: '{}', fiber: '{}'",
+                task_name.unwrap_or("<unnamed>"),
+                scope_name.unwrap_or("<unnamed>"),
+                h,
+                h.load() - 1,
+                ctx.name_or_unnamed(),
+                ctx.fiber_name_or_unnamed()
+            )
+        };
+
         trace!("{}", s);
     }
 
@@ -156,7 +180,7 @@ impl TaskSystem {
         scope_name: Option<&str>,
     ) {
         let s = format!(
-            "[Fork] Task: `{}`, range: `[{}..{})`, chunks: `{}`, scope: `{}` [{:p} <{}>]",
+            "[Fork] Task: '{}', range: `[{}..{})`, chunks: '{}', scope: '{}' [{:p} <{}>]",
             task_name.unwrap_or("<unnamed>"),
             range.start,
             range.end,

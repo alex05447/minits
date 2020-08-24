@@ -1,5 +1,5 @@
 use {
-    super::{thread_context::Thread, util::SendPtr},
+    super::{thread::Thread, util::SendPtr},
     crate::TaskSystem,
     std::{mem, num::NonZeroUsize, sync::atomic::Ordering, thread, time::Duration},
 };
@@ -52,7 +52,7 @@ impl TaskSystem {
         // `1` because any value other than `0` ("main thread") is fine here.
         let thread_context = Thread::new(thread_name, 1, None);
 
-        self.thread_context.store(thread_context).unwrap();
+        self.thread.store(thread_context).unwrap();
     }
 
     /// FS thread scheduler loop.
@@ -85,7 +85,7 @@ impl TaskSystem {
 
     /// Called before thread exit.
     fn fini_fs_thread_context(&self) {
-        let thread_context = unsafe { self.thread_context.take_unchecked() };
+        let thread_context = unsafe { self.thread.take_unchecked() };
         mem::drop(thread_context);
     }
 

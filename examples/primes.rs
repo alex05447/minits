@@ -3,18 +3,18 @@ use std::ops::Range;
 use std::sync::mpsc;
 use std::time;
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 use std::{io::Write, sync::Once};
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 extern crate log;
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 extern crate env_logger;
 
 use minits;
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 fn setup_logger() {
     static INIT: Once = Once::new();
 
@@ -29,7 +29,7 @@ fn setup_logger() {
 }
 
 fn main() {
-    #[cfg(feature = "tracing")]
+    #[cfg(feature = "logging")]
     setup_logger();
 
     let num_cores = minits::get_num_physical_cores().max(1);

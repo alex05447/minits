@@ -1,6 +1,7 @@
 mod builder;
 mod fiber_pool;
 mod handle;
+mod panic;
 mod scope;
 mod task;
 mod task_queue;
@@ -10,8 +11,8 @@ mod thread;
 mod util;
 mod yield_queue;
 
-#[cfg(feature = "tracing")]
-mod task_system_tracing;
+#[cfg(feature = "logging")]
+mod task_system_logging;
 
 #[cfg(feature = "profiling")]
 mod task_system_profiling;
@@ -28,6 +29,7 @@ mod task_system_io;
 pub use {
     builder::{TaskSystemBuilder, ThreadInitFiniCallback},
     handle::Handle,
+    panic::{PanicPayload, TaskPanicInfo, TaskPanics},
     scope::{RangeTaskFn, Scope, ScopedRangeTask, ScopedTask, SliceTaskFn, TaskFn, TaskRange},
     task_system::TaskSystem,
     task_system_singleton::{fini_task_system, init_task_system, task_system},

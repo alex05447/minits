@@ -197,6 +197,7 @@ impl TaskQueue {
     }
 
     /// Add a resumed task to the task queue.
+    ///
     /// `main_thread` is `true` if this is called from the "main" thread,
     /// regardless if the `task` is a "main" thread task or not.
     pub(crate) fn add_resumed_task(&self, task: TaskAndFiber, main_thread: bool) {

@@ -17,6 +17,7 @@ pub(crate) struct Task {
 
     #[cfg(feature = "task_names")]
     pub(crate) task_name: Option<String>,
+
     #[cfg(feature = "task_names")]
     // Points to the `Scope`'s name `String`, if `Some`.
     // We guarantee the task does not live longer then the `Scope` so that this pointer is always valid.
@@ -83,6 +84,18 @@ impl Task {
         }
     }
 
+    pub(crate) fn take_task_name(&mut self) -> Option<String> {
+        #[cfg(feature = "task_names")]
+        {
+            self.task_name.take()
+        }
+
+        #[cfg(not(feature = "task_names"))]
+        {
+            None
+        }
+    }
+
     pub(crate) fn scope_name(&self) -> Option<&str> {
         #[cfg(feature = "task_names")]
         {
@@ -95,12 +108,12 @@ impl Task {
         }
     }
 
-    #[cfg(any(feature = "profiling", feature = "tracing"))]
+    #[cfg(feature = "logging")]
     pub(crate) fn task_name_or_unnamed(&self) -> &str {
         self.task_name().unwrap_or("<unnamed>")
     }
 
-    #[cfg(feature = "tracing")]
+    #[cfg(feature = "logging")]
     pub(crate) fn scope_name_or_unnamed(&self) -> &str {
         self.scope_name().unwrap_or("<unnamed>")
     }

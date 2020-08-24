@@ -14,24 +14,24 @@ Plus, implemeting something as complex as a task system requires one to use almo
 
 These will be our requirements for the task system:
 
-- **Closure captures**: must support closures with captures: `&`, `&mut`, `move`, including arbitrary lifetimes, safely. We want the compiler to produce an error if we dangle a reference to a local borrow. We don't want to be limited to `'static` closures [^2].
+- **Closure captures**: must support closures with captures: `&`, `&mut`, `move`, including arbitrary lifetimes, safely. We want the compiler to produce an error if we break the borrow rules. We don't want to be limited to `'static` closures [^2].
 
-- **Memory**: closures shold be *unboxed*. We'd like to avoid dynamic memory allocation as much as possible.
+- **Memory**: closures shold be *unboxed*. We'd like to avoid dynamic memory allocation as much as possible. AFAIK, most (all?) current Rust async runtimes just `Box` the user future / closure in order for it to be able to be moved between threads safely.
 
 - **Synchronisation**. Ideally we want to spawn multiple tasks and synchronize (wait for) with each individual task / all of them.
 
-- **Task dependencies**. Tasks within tasks must be supported with no extra api clutter `.and_then(...)`-style.
+- **Task dependencies**. Tasks within tasks must be supported with no extra API clutter (`.and_then(...)`-style).
 
 - **Performance**. Must support lots of small tasks with minimal overhead.
 
 - **Simplicity**. Api must be as simple and unobtrusive as possible. We just want to run a function, not to build a `future`-style state machine. No macros or attributes.
 
-- **(Optional) Portability**. It sure would be nice if the task system would work out of the box on Win/Linux/Mac/whatever Rust supports. Win32 takes precedence, simply because that's the platform I'm familiar with.
+- **(Optional) Portability**. It sure would be nice if the task system would work out of the box on Win/Linux/Mac/whatever Rust supports. Win32 takes precedence, simply because that's the (only) platform I'm familiar with.
 
 ### **Closure captures**
 
-- `move || { \*code*\}` - all used environment variables are moved into the closure body. Closure has full ownership, no borrow issues.
-- `|| { \*code*\}` - borrows local variables. Most useful case. Safe Rust does not allow the closure to live longer than the shortest living borrowed variable. It also doesn't allow multiple mutable references to one variable[^3].
+- `move || { \*code*\ }` - all used environment variables are moved into the closure body. Closure has full ownership, no borrow issues.
+- `|| { \*code*\ }` - borrows local variables. Most useful case. Safe Rust does not allow the closure to live longer than the shortest living borrowed variable. It also doesn't allow multiple mutable references to one variable[^3].
 - only captures `'static` variables / simple function pointer - simplest case, but may be less useful due to inability to directly communicate results. No borrow issues.
 
     There exists an *unsafe* [`std::thread::Builder::spawn_unchecked`], which requires the caller to ensure that the thread handle is joined before any borrowed variables go out of scope. Both api's internally box the closure.
@@ -66,30 +66,31 @@ Fiber pros:
 Fiber cons:
 - memory use for fiber stacks.
 - low-cost context switch (as opposed to no context switch at all when waiting for task completion is effectively a busywait).
-- ???
+- suboptimal debugger support
 
 Thankfully, implementing both options at once should not be particularly more difficult than any one of them, allowing e.g. a hybrid scenario where we use a small-ish fiber pool, falling back to classic thread pool execution model when we run out of fibers.
 
 Plus fibers are cool.
 
 ### **Portability**
-1. **Fibers**. Win32 (and XBOX?) has a **very** simple [fiber API](https://docs.microsoft.com/en-us/windows/win32/procthread/fibers), which refelcts the very simple functionality we actually need: 1) create fiber with X Mb of stack, 2) convert thread to fiber, 3) switch to fiber, 4) delete fiber. That's all (other than a certain fiber-related function is implemented as a compiler intrinsic in MSVC and must be reimplemented in assembly, which was a PITA, but also a learning experience).
+
+1. **Fibers**. Win32 (and XBOX?) has a **very** simple [fiber API](https://docs.microsoft.com/en-us/windows/win32/procthread/fibers), which reflects the very simple functionality we actually need: 1) create fiber with `X Mb` of stack space, 2) convert thread to fiber, 3) switch to fiber, 4) delete fiber. That's all (other than a certain fiber-related function is implemented as a compiler intrinsic in MSVC and must be reimplemented in assembly, which was a PITA, but also a learning experience).
 
     For other platforms, including Win32, [context](https://docs.rs/crate/context) exists, but its portability is achieved at the cost of having a much larger amount of custom platform/ABI-specific register-twiddling assembly code that I'm comfortable with. Apparently, Linux/Max does not have a native fiber API. PS4 does have one AFAIK.
 
-    Bottom line - implement for Win32. If so desired, support for other platforms *should* be easy to add, where usual caveats apply to "easy".
+    Bottom line - [`implement for Win32`](https://github.com/alex05447/minifiber). If so desired, support for other platforms *should* be easy to add, where usual caveats apply to "easy".
 
-2. **Synchronisation primitives**. Standard Rust does not have a waitable/signallable semaphore or an event (which came as a surprise coming from C++/Win32 background). I didn't research further the reasons for this design decision. [parking_lot](https://docs.rs/parking_lot/0.9.0/parking_lot/) / [rsevents](https://docs.rs/rsevents/0.2.0/rsevents/) / [semaphore](https://docs.rs/semaphore/0.4.0/semaphore/) seem to be the portable ways to add the missing functionality. However, `parking_lot` does not seem to use native Win32 primitives under the hood, choosing to reimplement its abstractions.
+2. **Synchronisation primitives**. Standard Rust does not have a waitable/signallable semaphore or an event (which came as a surprise coming from C++/Win32 background). I didn't research further the reasons for this design decision. [parking_lot](https://docs.rs/parking_lot/*/parking_lot/) / [rsevents](https://docs.rs/rsevents/*/rsevents/) / [semaphore](https://docs.rs/semaphore/*/semaphore/) seem to be the portable ways to add the missing functionality. However, `parking_lot` does not seem to use native Win32 primitives under the hood, choosing to reimplement its abstractions (unless I misunderstood something).
 
     Bottom line - implement for Win32. Native auto reset events / semaphores are a perfect fit for our needs.
 
     Rust `std::sync::Mutex` does seem to use a critical section on Win32, which is good, but does have some poisoning-related overhead, which is less good. A critical section wrapper with a `Mutex` API is trivial to implement and is a good excercise.
 
-    Bottom line - use `std::sync::Mutex` just for the sake of staying as portable as possible.
+    Bottom line - use `std::sync::Mutex` just for the sake of staying as portable as possible. [`minievent`](https://github.com/alex05447/minievent) wraps the Windows event / semaphore.
 
 3. **Async IO**. Win32 has the nice concept of IO completion ports, which make writing async IO handling code in a fiber-based task system pretty straightforward.
 
-    I have no idea if there's a direct equivalent on other OS's, but it appears there isn't (?). Just make it Windows exclusive for now.
+    I have no idea if there's a direct equivalent on other OS's, but it appears there isn't (?). Just make it [`Windows exclusive`](https://github.com/alex05447/miniiocp) for now.
 
 
 ## **Use cases**
@@ -103,11 +104,13 @@ Plus fibers are cool.
             /* ... */
         };
 
-        ts.add_task(f);
+        ts.task(f);
 
         // We go on, `f()` might or might not complete as far as we know,
         // unless we do:
         ts.wait_for_all();
+
+        // `f()` is guaranteed to have completed by now.
     }
     ```
 
@@ -116,21 +119,21 @@ Plus fibers are cool.
     let ts = TaskSystem::new();
 
     {
-        let h = TaskHandle::new();
+        let h = ts.handle();
 
         let f = || -> () {
             /* ... */
         };
 
-        ts.add_task(&h, f); // Task 1.
+        ts.task(&h, f); // Task 1.
 
         // Do something else for a while.
 
         // We may even add another task to the same handle:
-        ts.add_task(&h, || {/* ... */} ); // Task 2.
+        ts.task(&h, || {/* ... */} ); // Task 2.
 
         // Wait:
-        ts.wait_for_handle(&h); // Waits for both tasks above.
+        ts.wait(&h); // Waits for both tasks above.
         // Or:
         ts.wait_for_all(); // Waits for all tasks, including both tasks above.
 
@@ -151,20 +154,20 @@ Plus fibers are cool.
         };
 
         // Task is queued for execution but will not complete until later.
-        ts.add_task(f);
+        ts.task(f);
     }
     // ERROR: `local` does not live long enough.
     ```
 
     In code above, we want to get a compilation error because `f()` might outlive `local`.
-    There's no safe way to have a fire-and-forget task with local borrows. We can bend the rules and force the above to compile with unsafe code within `add_task()`, but we will end up accessing garbage through `local`.
+    There's no safe way to have a fire-and-forget task with local borrows. We can bend the rules and force the above to compile with unsafe code within `task()`, but we will end up accessing garbage through `local`.
 
 4. (Does not work) Local borrow. Explicit wait.
     ```rust
         let ts = TaskSystem::new();
 
         {
-            let h = TaskHandle::new();
+            let h = ts.handle();
 
             let local = /* ... */;
 
@@ -173,9 +176,9 @@ Plus fibers are cool.
                 /* ... */
             };
 
-            ts.add_task(&h, f);
+            ts.task(&h, f);
 
-            ts.wait_for_handle(&h);
+            ts.wait(&h);
             // Or:
             ts.wait_for_all();
 
@@ -190,7 +193,7 @@ Plus fibers are cool.
         let ts = TaskSystem::new();
 
         {
-            let h = TaskHandle::new();
+            let h = ts.handle();
 
             let local = /* ... */;
 
@@ -199,10 +202,10 @@ Plus fibers are cool.
                 /* ... */
             };
 
-            unsafe { ts.add_task_unsafe(&h, f); }
+            unsafe { ts.task_unsafe(&h, f); }
 
             // Wait:
-            ts.wait_for_handle(&h);
+            ts.wait(&h);
             // Or:
             ts.wait_for_all();
 
@@ -213,7 +216,7 @@ Plus fibers are cool.
         // still compile, but now we might access garbage in `local` and `h`.
         ts.wait_for_all();
     ```
-    `add_task_unsafe()` is annotated `unsafe` and will take a reference to `h` and `f()` with *any* lifetime. It's possible to make the code above access dangling references by (re)moving the wait call. It's a start, but we'd like to do better.
+    `task_unsafe()` is annotated `unsafe` and will take a reference to `h` and `f()` with *any* lifetime. It's possible to make the code above access dangling references by (re)moving the wait call. It's a start, but we'd like to do better.
 
 6. Local borrow. Trivial blocking task spawn.
     ```rust
@@ -227,21 +230,21 @@ Plus fibers are cool.
                 /* ... */
             };
 
-            ts.add_task_and_wait(f);
+            ts.task_and_wait(f);
             // Equivalent to:
             f();
 
             // `f()` is guaranteed to have completed by now.
         }
     ```
-    When `add_task_and_wait()` returns, `f()` is guaranteed to have been executed, so the compiler is happy. Implementation might execute the closure inline. This does not look useful, however `f()` might spawn and wait for more tasks itself, creating a dependency graph of tasks.
+    When `task_and_wait()` returns, `f()` is guaranteed to have been executed, so the compiler is happy. Implementation might execute the closure inline. This does not look useful, however `f()` might spawn and wait for more tasks itself, creating a dependency graph of tasks.
 
 7. Local borrow. Using task scopes.
     ```rust
         let ts = TaskSystem::new();
 
         {
-            let s = ts.new_task_scope();
+            let s = ts.scope();
 
             let local = /* ... */;
 
@@ -250,10 +253,10 @@ Plus fibers are cool.
                 /* ... */
             };
 
-            s.add_task(f); // Task 1.
+            s.task(f); // Task 1.
 
             // We may even add another task to the same scope:
-            s.add_task( || {/* ... */} ); // Task 2.
+            s.task( || {/* ... */} ); // Task 2.
 
             // When `s` goes out of scope (or is explicitly dropped),
             // it waits for all tasks added to it.
@@ -262,72 +265,72 @@ Plus fibers are cool.
             // Both taks 1 and 2 are guaranteed to have completed by now.
         }
     ```
-    `TaskScope` implements the `Drop` trait and waits for all associated tasks to complete when it goes out of scope.
+    `Scope` implements the `Drop` trait and waits for all associated tasks to complete when it goes out of scope.
 
 ### **Summary**:
 
-- We don't need to borrow any local variables or wait for task completion - use `TaskSystem::add_task<F>(f :F) where F : FnOnce() + 'static`.
+- We don't need to borrow any local variables or wait for task completion - use `TaskSystem::task<F>(f: F) where F: FnOnce() + 'static`.
     ```rust
     let ts = TaskSystem::new();
     let arg = 42;
-    ts.add_task(/*move*/ || println!("Hello from a task. Arg is {}", arg));
+    ts.task( /*move*/ || println!("Hello from a task. Arg is {}", arg));
     ```
 
-- We need to borrow some local variables but want to wait for the task to complete - use `TaskSystem::add_task_and_wait(f :F) where F : FnOnce()`,
+- We need to borrow some local variables but want to wait for the task to complete - use `TaskSystem::task_and_wait(f: F) where F: FnOnce()`,
     ```rust
     let ts = TaskSystem::new();
     let arg = "arg".to_owned();
     let mut result = 0;
-    ts.add_task_and_wait(|| {
+    ts.task_and_wait(|| {
         println!("Hello from a task. Arg is {}", arg);
         result = 42;
-        });
+    });
     ```
 
-    or `TaskSystem::new_task_scope() -> TaskScope` and `TaskScope::add_task(f :F) where F : FnOnce()`.
+    or `TaskSystem::scope() -> Scope` and `Scope::task(f :F) where F : FnOnce()`.
 
     ```rust
     let ts = TaskSystem::new();
     {
-        let s = ts.new_task_scope();
+        let s = ts.scope();
         let arg = "arg".to_owned();
         let mut result = 0;
-        s.add_task(|| {
+        s.task(|| {
             println!("Hello from a task. Arg is {}", arg);
             result = 42;
         });
     }
     ```
 
-- We don't need to borrow any local variables but want to wait for the task to complete - use same as above, plus `TaskHandle::new_task_handle() -> TaskHandle`, `TaskSystem::add_task<F>(h :&TaskHandle, f :F) where F : FnOnce() + 'static`, `TaskSystem::wait_for_handle(h :&TaskHandle)`.
+- We don't need to borrow any local variables but want to wait for the task to complete - use same as above, plus `TaskSystem::handle() -> Handle`, `TaskSystem::task<'h, F>(h: &'h Handle, f: F) where F: FnOnce() + 'h`, `TaskSystem::wait(h: &Handle)`.
     ```rust
     let ts = TaskSystem::new();
     {
-        let h = TaskHandle::new();
+        let h = ts.handle();
         let arg = 42;
-        ts.add_task(&h, || println!("Hello from a task. Arg is {}", arg));
-        ts.wait_for_handle(&h);
+        ts.task(&h, || println!("Hello from a task. Arg is {}", arg));
+        ts.wait(&h);
     }
     ```
 
 ## **Problems**
 
-### TaskScope
+### **Scope**
 
-So we want to go ahead and implement the `TaskScope`. The simplest implementation contains a task handle internally. When we add a task to the task system, we reference this handle. When we `drop()` the `TaskScope`, we `wait_for_handle()` on this handle.
+So we want to go ahead and implement the `Scope`. The simplest implementation contains a task `Handle` internally. When we add a task to the task system via the `Scope`, we reference this handle. When we `drop()` the `Scope`, we `wait()` on this handle.
 
-So far so good. This is straightforward to do in C++. When destructors are called for objects on the stack, `this` pointer is the same as it was when the object was constructed. Which is great, because we need the address of/pointer/reference to the internal `TaskHandle` to be the same when we `add_task()` when the task scope is live, and when we `wait_for_handle()` when it is being dropped when it goes out of scope.
+So far so good. This is straightforward to do in C++. When destructors are called for objects on the stack, `this` pointer is the same as it was when the object was constructed (AFAIK?). Which is great, because we need the address of/pointer/reference to the internal `Handle` to be the same when we call `task()` when the task scope is live, and when we `wait()` for handle when it is being dropped when it goes out of scope.
 
 Unfortunately, when we translate this to Rust we immediately realize we have a problem:
 ```rust
-struct TaskScope<'ts> {
-    handle :TaskHandle,
-    task_system :&'ts TaskSystem,
+struct Scope<'ts> {
+    handle: Handle,
+    task_system: &'ts TaskSystem,
 }
 
 // Details omitted...
 
-impl Drop for TaskScope {
+impl Drop for Scope {
     fn drop(&mut self) {
         // This would be just fine in C++ - the object is still on the stack.
         self.task_system.wait_for_handle(&self.task_handle);
@@ -338,10 +341,10 @@ impl Drop for TaskScope {
 
 let ts = TaskSystem::new();
 {
-    let s = ts.new_task_scope();
+    let s = ts.scope();
     let arg = "arg".to_owned();
     let mut result = 0;
-    s.add_task(|| {
+    s.task(|| {
         println!("Hello from a task. Arg is {}", arg);
         result = 42;
     });
@@ -356,7 +359,7 @@ let ts = TaskSystem::new();
     // `mem::drop<T>(_t :T) {}
     // The dropped value is MOVED into the function,
     // and the observed `self` address in the drop handler
-    // is different to the address used in `add_task()`.
+    // is different to the address used in `task()`.
     // We have UB when we decrement the task handle counter
     // on task completion and hang waiting for an invalid counter.
     // Oops.
@@ -365,21 +368,23 @@ let ts = TaskSystem::new();
 
 My quick research into this did not find any solutions, or even discussion of the topic.
 
-The closest is `std::pin::Pin`, which *seems* to solve a completely different issue by documenting the immovable nature of some value, but does *nothing* by itself, similar to `Send` / `Sync` traits. If an object is `PinBox`'ed, it's guaranteed to have a stable address, by virtue of being allocated on the heap, and pinning it is a no-op. And where we'd like objects to be pinned - on the stack - we can't. Is it even possible to have `drop` not move the object? Maybe I'm missing something, but this is probably my biggest gripe with Rust right now.
+The closest is `std::pin::Pin`, which *seems* to solve a completely different issue by documenting the immovable nature of some value, but does *nothing* by itself, similar to `Send` / `Sync` traits. If an object is `PinBox`'ed, it's guaranteed to have a stable address, simply by virtue of being allocated on the heap, and pinning it is a no-op. And where we'd like objects to be pinned - on the stack - we can't. Is it even possible to have `drop` not move the object? Maybe I'm missing something.
 
 So what are our options?
-1) Leave things as they are and document that dropping a `TaskScope` prematurely leads to UB.
-2) Add some API clutter and do something like this, with an explicit handle allocated on the stack above the call to `new_task_scope()`:
+1) Leave things as they are and document that dropping a `Scope` prematurely leads to UB.
+2) Add some API clutter and do something like this, with an explicit handle allocated on the stack above the call to `scope()`:
     ```rust
     let ts = TaskSystem::new();
     {
-        let h = TaskHandle::new();
-        // Explicitly reference a task handle on the stack.
-        // Yeah, I really wish `h` could just be contained in `s`.
-        let s = ts.new_task_scope(&h);
         let arg = "arg".to_owned();
         let mut result = 0;
-        s.add_task(|| {
+
+        let h = ts.handle();
+        // Explicitly reference a task handle on the stack.
+        // Yeah, I really wish `h` could just be contained in `s`.
+        let s = ts.scope(&h);
+
+        s.task(|| {
             println!("Hello from a task. Arg is {}", arg);
             result = 42;
         });
@@ -387,51 +392,101 @@ So what are our options?
         // This works fine, `h` has a stable address for the entire scope,
         // as does an implicit drop.
         mem::drop(s);
+
+        assert_eq!(result, 42);
     ```
+
     However this case behaves somewhat suboptimally:
+
     ```rust
     let ts = TaskSystem::new();
-    let h = TaskHandle::new();
     {
-        let s = ts.new_task_scope(&h);
         let arg = "arg".to_owned();
         let mut result = 0;
-        s.add_task(|| {
+
+        let h = ts.handle();
+        let s = ts.scope(&h);
+
+        s.task(|| {
             println!("Hello from a task. Arg is {}", arg);
             result = 42;
         });
 
         {
             // Share the handle of the parent scope.
-            let s_nested = ts.new_task_scope(&h);
-            s_nested.add_task(|| {
+            let s_nested = ts.scope(&h);
+
+            s_nested.task(|| {
                 println!("Hello from a nested task.");
-                result = 42;
             });
 
             // At this point we'll wait for BOTH tasks to finish.
+            mem::drop(s);
         }
+
         // Wait on drop here is a no-op - we have alreaady waited
         // for the shared handle in the nested scope.
+        mem::drop(s);
+
+        assert_eq!(result, 42);
     }
     ```
     This makes waiting less granular. The first wait on any of the scopes associated with the handle waits for all tasks associated with that handle through any of the scopes. This might or might not be desirable.
 
-3) Allocate each task handle (inside each task scope or free) on the heap:
+    This is even worse, however (easier to demonstrate in single-threaded mode, but *will* happen randomly in multi-threaded mode as well):
+
     ```rust
-    impl TaskHandle {
-        fn new() -> Box<TaskHandle> {
+    let ts = TaskSystem::new();
+    {
+        let arg = "arg".to_owned();
+        let mut result = 0;
+
+        let h = ts.handle();
+        let h = &h;
+        let s = ts.scope(h);
+
+        s.task(|| {
+            println!("Hello from a task. Arg is {}", arg);
+            result = 42;
+
+            // NOTE - reusing the parent scope's handle here.
+            let s = ts.scope(h);
+
+            s.task(|_| {
+                    println!("Hello from a nested task.");
+                    result = 7;
+                });
+
+            // 2) Drop the inner scope - and oops, we tried to wait on the same handle
+            // as in 1) below, and the task system does not know which task / fiber to
+            // wake / resume later.
+            mem::drop(s);
+        });
+
+        // 1) Drop the outer `scope`, wait on the handle.
+        mem::drop(s);
+    }
+    ```
+
+    Unfortunately, we cannot easily allow multiple tasks to be associated with the same handle, because the handle's address is used the unique `yield key` for each yielded task / fiber, which is used to wake up /resume the correct fiber later, when it is safe to do so. Of course, we could store multiple tasks and their statuses internally per `yield key` / task handle, but it would require (unnecessary) memory allocations.
+
+3) Alternatively we could
+
+4) Allocate each task handle (inside each task scope or free) on the heap:
+    ```rust
+    impl Handle {
+        fn new() -> Box<Handle> {
             // ...
         }
     }
     ```
     Oviously suboptimal when there's a large number of tasks.
 
-4) Preallocate a pool of `Box<TaskHandle>` in the task system, locked in a `Mutex`.
+5) Preallocate a pool of `Box<Handle>` in the task system, locked in a `Mutex`.
 
     Better than above, but still bad.
 
-5) Some sort of generational hanlde indexed array of counters in the task system.
+6) Some sort of generational hanlde indexed array of counters in the task system.
 
     Pros: no individually heap-allocated atomic counters. Safe to copy around in case of some unexpected UB in the unsafe pointer-wrangling implementation.
 
@@ -462,7 +517,7 @@ enum YieldStatus {
 }
 
 struct YieldedTask {
-    task :TaskContext, // Contains the task's fiber as well.
+    task :Context, // Contains the task's fiber as well.
     key :std::num::NonZeroUsize,
     status :YieldStatus,
 }
@@ -517,7 +572,7 @@ Here's the best-case synchronisation overhead for the hot path we optimize for -
 **Resuming thread**:
 1) [AW] task handle atomic decrement and compare to `0` -> success,
 2) [CS] lock the yield queue,
-3) [ITER] search the yield key array `yield_keys :Vec<usize>` for entry with `key == &TaskHandle` -> not found.
+3) [ITER] search the yield key array `yield_keys :Vec<usize>` for entry with `key == &Handle` -> not found.
 
 Seems to be pretty efficient.
 
@@ -547,7 +602,7 @@ set `status == YieldStatus::Ready`, unlock the yield queue.
 **Resuming thread**:
 1) [AW] task handle atomic decrement and compare to `0` -> success,
 2) [CS] lock the yield queue,
-3) [ITER] search the yield key array `yield_keys :Vec<usize>` for entry with `key == &TaskHandle` -> found with `status == YieldStatus::Ready`,
+3) [ITER] search the yield key array `yield_keys :Vec<usize>` for entry with `key == &Handle` -> found with `status == YieldStatus::Ready`,
 4) [POP] remove the found entry, unlock the yield queue,
 5) [CS] lock the resumed fiber queue,
 6) [PUSH] push the resumed fiber from the removed entry, signal the event, unlock the resumed fiber queue.
@@ -599,7 +654,7 @@ fn scheduler_loop(&self) {
 
             // Take the current task, decrement the task handle(s),
             // maybe resume a yielded fiber waiting for this task.
-            self.finish_task(self.take_current_task());
+            self.finish_task(self.take_task());
 
         // No tasks - wait for an event to be signaled.
         // Events are signaled / threads are woken up when a new task is added
@@ -611,7 +666,7 @@ fn scheduler_loop(&self) {
 }
 ```
 
-User tasks may yield during their exexution (see the yielding section above). For example, waiting for a task to finish (`TaskHandle` counter to reach `0`), or an IO operation completion (we also use a `TaskHandle` to poll for completion, but not for resuming).
+User tasks may yield during their exexution (see the yielding section above). For example, waiting for a task to finish (`Handle` counter to reach `0`), or an IO operation completion (we also use a `Handle` to poll for completion, but not for resuming).
 
 This is the implementation:
 
@@ -645,7 +700,7 @@ where
                 // by pushing it to the resumed queue if the yield dependency *is* complete.
                 self.mark_current_fiber_as_yielded(yield_key);
 
-                yield_queue.yield_fiber(self.take_current_fiber(), yield_key);
+                yield_queue.yield_fiber(self.take_fiber(), yield_key);
 
                 // Setup the thread context (current fiber / task) and switch to it.
                 // If it's a new fiber, it will run the scheduler loop,
@@ -671,7 +726,7 @@ where
             // The task may yield.
             if let Some(task) = self.try_get_task() {
                 // Save the current task.
-                let current_task = self.take_current_task();
+                let current_task = self.take_task();
 
                 // Prepare the thread context (current task) and run the task.
                 self.execute_task(task);
@@ -680,10 +735,10 @@ where
 
                 // Take the current task, decrement the task handle(s),
                 // maybe resume a yielded fiber waiting for this task.
-                self.finish_task(self.take_current_task());
+                self.finish_task(self.take_task());
 
                 // Restore the current task.
-                self.set_current_task(current_task);
+                self.set_task(current_task);
 
                 // If we finished the right task / were resumed via other means, we're done.
                 // Else continue the loop, including checking for resumed/free fibers.
@@ -730,7 +785,7 @@ trait YieldData {
 
 `yield_key()` returns an arbitrary non-null `usize` value which may later be used in the call to `try_resume_fiber()`.
 
-E.g., when waiting for task completion, `yield_key` is the address of the `TaskHandle` associated with the task. `is_complete()` loads the `TaskHandle` counter and compares it to `0`. When the task system finishes a task, it calls `try_resume_fiber()` with this `yield_key`.
+E.g., when waiting for task completion, `yield_key` is the address of the `Handle` associated with the task. `is_complete()` loads the `Handle` counter and compares it to `0`. When the task system finishes a task, it calls `try_resume_fiber()` with this `yield_key`.
 
 This mechanism is also used for async IO. Here, `yield_key` is the address of Win32 `OVERLAPPED` struct with an appended atomic counter used for `is_complete()`. When an async IO operation completes, the IO completion port thread decrements the counter and tries to resume a fiber yielded with that yield key.
 
@@ -795,7 +850,7 @@ This mechanism is also used for async IO. Here, `yield_key` is the address of Wi
         // time error when executing multiple closures
         // with mutable borrows.
         fn execute_closure<F>(&mut self, f :F)
-            where F : FnOnce() + 'a
+            where F : FnOnce()
         {
             f();
         }
@@ -815,16 +870,16 @@ This mechanism is also used for async IO. Here, `yield_key` is the address of Wi
 
 [^4]: We just `memcpy()` the closure object into a fixed-size buffer and use the generic closure type to create a static function which unpacks and calls the closure:
     ```rust
-    const BUFFER_SIZE :usize = /* ... */;
+    const BUFFER_SIZE: usize = /* ... */;
     type ClosureStorage = [u8; BUFFER_SIZE];
     type ClosureExecutor = fn(&ClosureStorage);
 
-    let b : ClosureStorage = [0u8; BUFFER_SIZE];
-    let e : ClosureExecutor;
+    let b: ClosureStorage = [0u8; BUFFER_SIZE];
+    let e: ClosureExecutor;
 
     let f = || { /* ... */ };
 
-    fn store_closure<F>(f :F, b :&mut ClosureStorage, e :&mut ClosureExecutor)
+    fn store_closure<F>(f: F, b: &mut ClosureStorage, e: &mut ClosureExecutor)
         where F : FnOnce()
     {
         // NOTE - make sure the buffer is large enough.
@@ -832,15 +887,15 @@ This mechanism is also used for async IO. Here, `yield_key` is the address of Wi
         // `memcpy()` the closure object (struct) to the buffer.
         // `ptr::write()` does not drop `f` which is exactly what we need.
         unsafe {
-            ptr::write(b.as_mut_ptr() as *mut F, f);
+            ptr::write_unaligned(b.as_mut_ptr() as *mut F, f);
         }
 
         // This closure resolves to a static function pointer during
         // monomorphisation.
-        *e = |b :&ClosureStorage| {
+        *e = |b: &ClosureStorage| {
             unsafe {
                 // `f` is moved out of the buffer, executed and dropped.
-                let f = ptr::read::<F>(b.as_ptr() as *const F);
+                let f = ptr::read_unaligned::<F>(b.as_ptr() as *const F);
                 f();
             }
         };
@@ -851,6 +906,8 @@ This mechanism is also used for async IO. Here, `yield_key` is the address of Wi
     // This calls `f`.
     e(&b);
     ```
+
+    See [`miniclosure`](https://github.com/alex05447/miniclosure)
 
 [`std::thread::Builder::spawn`]: https://doc.rust-lang.org/std/thread/struct.Builder.html#method.spawn
 [`std::thread::Builder::spawn_unchecked`]: https://doc.rust-lang.org/std/thread/struct.Builder.html#method.spawn_unchecked

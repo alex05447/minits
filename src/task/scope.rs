@@ -1,8 +1,9 @@
 use {
-    crate::{Handle, TaskSystem},
+    crate::{Handle, TaskPanics, TaskSystem},
     std::{
         borrow::Cow,
         ops::{Index, Range},
+        panic::resume_unwind,
     },
 };
 
@@ -64,8 +65,7 @@ where
     /// [`TaskSystem::task_name`]: struct.TaskSystem.html#method.task_name
     #[allow(unused_variables, unused_mut)]
     pub fn name<N: Into<Cow<'n, str>>>(mut self, name: N) -> Self {
-        #[cfg(feature = "task_names")]
-        {
+        if cfg!(feature = "task_names") {
             self.name = Some(name.into());
         }
         self
@@ -103,7 +103,7 @@ where
     }
 }
 
-/// Type representing the range of [`tasks`] to be executed by the [`TaskSystem`] in parallel.
+/// The type representing a range of [`tasks`] to be executed by the [`TaskSystem`] in parallel.
 ///
 /// [`tasks`]: trait.RangeTaskFn.html
 /// [`TaskSystem`]: struct.TaskSystem.html
@@ -183,8 +183,7 @@ where
     /// [`TaskSystem::task_name`]: struct.TaskSystem.html#method.task_name
     #[allow(unused_variables, unused_mut)]
     pub fn name<N: Into<Cow<'n, str>>>(mut self, name: N) -> Self {
-        #[cfg(feature = "task_names")]
-        {
+        if cfg!(feature = "task_names") {
             self.name = Some(name.into());
         }
         self
@@ -280,8 +279,7 @@ where
     /// [`TaskSystem::task_name`]: struct.TaskSystem.html#method.task_name
     #[allow(unused_variables, unused_mut)]
     pub fn name<N: Into<Cow<'n, str>>>(mut self, name: N) -> Self {
-        #[cfg(feature = "task_names")]
-        {
+        if cfg!(feature = "task_names") {
             self.name = Some(name.into());
         }
         self
@@ -329,6 +327,16 @@ where
 /// before the `Scope` goes out of scope (is dropped);
 /// 2) no mutable borrow aliasing is allowed for tasks associated with this `Scope`,
 /// and borrow lifetimes are enforced accorfing to safe Rust rules.
+///
+/// There are two ways to wait on the scope -
+/// calling [`wait`] on it, which returns any and all [`panics`] which occured in children tasks,
+/// or dropping it, which logs (requires "logging" feature) / prints the panics, if any, and re-throws the [`panics`].
+///
+/// NOTE - it is unsafe to `std::mem::forget()` the `Scope`, as its drop handler will not run
+/// and thus there's no guarantee any tasks associated with the `Scope` will be complete.
+///
+/// [`wait`]: #method.wait
+/// [`panics`]: struct.TaskPanics.html
 pub struct Scope<'h, 'ts> {
     /// The scope's task handle.
     /// Needed for the stable address of its atomic task counter, incl. in the `Scope`'s `Drop` handler.
@@ -478,6 +486,27 @@ impl<'h, 'ts> Scope<'h, 'ts> {
         ScopedGraphTask::new(self, f, graph)
     }
 
+    /// Block the current thread until all tasks associated with the [`scope`] are complete.
+    /// Attempts to yield the current fiber, if any; otherwise attempts to execute the tasks inline.
+    ///
+    /// Returns the [`task panics`] if any occured in tasks associated with the [`scope`],
+    /// and any of their children tasks as well.
+    ///
+    /// NOTE: dropping the [`scope`] achieves the same goal, but does not allow you to handle the panics.
+    ///
+    /// [`scope`]: struct.Scope.html
+    /// [`task panics`]: struct.TaskPanics.html
+    pub fn wait(self) -> Result<(), TaskPanics> {
+        self.wait_impl()
+    }
+
+    fn wait_impl(&self) -> Result<(), TaskPanics> {
+        unsafe {
+            self.task_system
+                .wait_for_handle_impl(self.handle, self.name())
+        }
+    }
+
     /// Actually submits the fully initialized [`task`] for execution by the [`TaskSystem`].
     /// The task is guaranteed to be finished by the time this `Scope` goes out of scope.
     ///
@@ -508,7 +537,7 @@ impl<'h, 'ts> Scope<'h, 'ts> {
                 f,
                 range,
                 multiplier,
-                name.as_ref().map(|n| n.as_str()),
+                name.as_ref().map(String::as_str),
                 self.name(),
             );
         }
@@ -543,12 +572,17 @@ impl<'h, 'ts> Scope<'h, 'ts> {
 
 impl<'h, 'ts> Drop for Scope<'h, 'ts> {
     fn drop(&mut self) {
-        unsafe {
-            if let Some(name) = self.name() {
-                self.task_system.wait_for_handle_named(self.handle, name);
-            } else {
-                self.task_system.wait_for_handle(self.handle);
+        if let Err(panics) = self.wait_impl() {
+            #[cfg(feature = "logging")]
+            {
+                error!("{}", format!("{}", panics));
             }
+            #[cfg(not(feature = "logging"))]
+            {
+                eprintln!("{}", format!("{}", panics));
+            }
+
+            resume_unwind(Box::new(panics));
         }
     }
 }

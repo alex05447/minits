@@ -45,7 +45,7 @@ pub struct File<'ts> {
     file: fs::File,
     task_system: &'ts TaskSystem,
 
-    #[cfg(feature = "tracing")]
+    #[cfg(feature = "logging")]
     file_name: String,
 }
 
@@ -259,10 +259,10 @@ impl<'ts> File<'ts> {
     fn wait_for_io_start(&self, file_name: Option<&str>, read: bool) {
         let ctx = self.task_system.thread();
 
-        #[cfg(any(feature = "profiling", feature = "tracing"))]
+        #[cfg(any(feature = "profiling", feature = "logging"))]
         let task_name = ctx.task_name_or_unnamed();
 
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "logging")]
         {
             let s = format!(
                 "[Wait start] For file {}: `{}` (cur. task: `{}`, thread: `{}`, fiber: `{}`)",
@@ -277,7 +277,7 @@ impl<'ts> File<'ts> {
 
         #[cfg(feature = "profiling")]
         if !ctx.is_main_task() {
-            println!("<<< end_cpu_sample `{}` (pre-wait)", task_name);
+            //println!("<<< end_cpu_sample `{}` (pre-wait)", task_name);
             self.task_system.profiler_end_scope();
         }
     }
@@ -286,16 +286,16 @@ impl<'ts> File<'ts> {
     fn wait_for_io_end(&self, file_name: Option<&str>, read: bool) {
         let ctx = self.task_system.thread();
 
-        #[cfg(any(feature = "profiling", feature = "tracing"))]
-        let task_name = ctx.task_name_or_unnamed();
+        #[cfg(any(feature = "profiling", feature = "logging"))]
+        let task_name = ctx.task_name();
 
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "logging")]
         {
             let s = format!(
                 "[Wait end] For file {}: `{}` (cur. task: `{}`, thread: `{}`, fiber: `{}`)",
                 if read { "read" } else { "write" },
                 file_name.unwrap_or("<unnamed>"),
-                task_name,
+                task_name.unwrap_or("<unnamed>"),
                 ctx.name_or_unnamed(),
                 ctx.fiber_name_or_unnamed()
             );
@@ -304,7 +304,10 @@ impl<'ts> File<'ts> {
 
         #[cfg(feature = "profiling")]
         if !ctx.is_main_task() {
-            println!(">>> begin_cpu_sample `{}` (post-wait)", task_name);
+            // println!(
+            //     ">>> begin_cpu_sample `{}` (post-wait)",
+            //     task_name.unwrap_or("<unnamed>")
+            // );
             self.task_system.profiler_begin_scope(task_name);
         }
     }
@@ -315,17 +318,17 @@ impl<'ts> File<'ts> {
             file,
             task_system,
 
-            #[cfg(feature = "tracing")]
+            #[cfg(feature = "logging")]
             file_name,
         }
     }
 
     fn file_name(&self) -> Option<&str> {
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "logging")]
         {
             return Some(&self.file_name);
         }
-        #[cfg(not(feature = "tracing"))]
+        #[cfg(not(feature = "logging"))]
         None
     }
 }

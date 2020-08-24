@@ -1,18 +1,23 @@
 use {
     super::{
         fiber_pool::{FiberPool, FiberPoolParams},
+        panic::fmt_panic,
         task::Task,
         task_queue::{NewOrResumedTask, TaskQueue},
         thread::Thread,
         util::SendPtr,
         yield_queue::TaskAndFiber,
     },
-    crate::{Handle, RangeTaskFn, Scope, TaskFn, TaskRange, ThreadInitFiniCallback},
+    crate::{
+        Handle, PanicPayload, RangeTaskFn, Scope, TaskFn, TaskPanics, TaskRange,
+        ThreadInitFiniCallback,
+    },
     minifiber::Fiber,
     minithreadlocal::ThreadLocal,
     std::{
         mem,
         num::NonZeroUsize,
+        panic::{catch_unwind, AssertUnwindSafe},
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc, Barrier,
@@ -84,8 +89,13 @@ enum FiberToSwitchTo {
 impl TaskSystem {
     /// Creates a new [`Handle`] for use with a [`Scope`].
     ///
+    /// Each [`Scope`] must be associated with a unique [`Handle`].
+    /// NOTE - prefer using the [`task_scope`] / [`task_scope_named`] macros instead.
+    ///
     /// [`Handle`]: struct.Handle.html
     /// [`Scope`]: struct.Scope.html
+    /// [`task_scope`]: macro.task_scope.html
+    /// [`task_scope_named`]: macro.task_scope_named.html
     pub fn handle(&self) -> Handle {
         Handle::new()
     }
@@ -93,9 +103,13 @@ impl TaskSystem {
     /// Creates a new [`Scope`] object which provides borrow-safe task system functionality.
     /// Requires a [`Handle`] created by a previous call to [`handle`].
     ///
+    /// Each [`Scope`] must be associated with a unique [`Handle`].
+    /// NOTE - prefer using the [`task_scope`] macro instead.
+    ///
     /// [`Handle`]: struct.Handle.html
     /// [`Scope`]: struct.Scope.html
     /// [`handle`]: #method.handle
+    /// [`task_scope`]: macro.task_scope.html
     pub fn scope<'h, 'ts>(&'ts self, handle: &'h Handle) -> Scope<'h, 'ts> {
         Scope::new(handle, &self, None)
     }
@@ -106,10 +120,14 @@ impl TaskSystem {
     /// `name` may be retrieved by [`scope_name`] within the task closure.
     /// Requires "task_names" feature.
     ///
+    /// Each [`Scope`] must be associated with a unique [`Handle`].
+    /// NOTE - prefer using the [`task_scope_named`] macro instead.
+    ///
     /// [`Handle`]: struct.Handle.html
     /// [`Scope`]: struct.Scope.html
     /// [`handle`]: #method.handle
     /// [`scope_name`]: #method.scope_name
+    /// [`task_scope_named`]: macro.task_scope_named.html
     pub fn scope_named<'h, 'ts, N: Into<String>>(
         &'ts self,
         handle: &'h Handle,
@@ -200,7 +218,7 @@ impl TaskSystem {
 
         let num_chunks = (num_threads * multiplier).min(range_size);
 
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "logging")]
         self.trace_fork_task_range(h, &range, num_chunks, task_name, scope_name);
 
         self.fork_task_range(h, f, range, num_chunks, task_name, scope_name, false);
@@ -210,33 +228,32 @@ impl TaskSystem {
     fn on_task_added(&self, task: &Task) {
         debug_assert!(!task.is_none());
 
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "logging")]
         self.trace_added_task(&task);
     }
 
     /// Block the current thread until all tasks associated with the task handle `h` are complete.
     /// Attempts to yield the current fiber, if any; otherwise attempts to execute the tasks inline.
-    pub(crate) unsafe fn wait_for_handle(&self, h: &Handle) {
-        self.wait_for_handle_impl(h, None);
-    }
-
-    /// Block the current thread until all tasks associated with the task handle `h` are complete.
-    /// Attempts to yield the current fiber, if any; otherwise attempts to execute the tasks inline.
-    pub(crate) unsafe fn wait_for_handle_named(&self, h: &Handle, scope_name: &str) {
-        self.wait_for_handle_impl(h, Some(scope_name));
-    }
-
-    unsafe fn wait_for_handle_impl(&self, handle: &Handle, scope_name: Option<&str>) {
+    ///
+    /// Returns a [`linked list of task panics`] if any occured in tasks associated with the handle,
+    /// and any of their children tasks as well.
+    ///
+    /// [`linked list of task panics`]: struct.TaskPanics.html
+    pub(crate) unsafe fn wait_for_handle_impl(
+        &self,
+        h: &Handle,
+        scope_name: Option<&str>,
+    ) -> Result<(), TaskPanics> {
         // Trivial case - the waited-on handle is already complete.
-        if handle.is_complete() {
-            return;
+        if h.is_complete() {
+            return self.take_panics(h);
         }
 
         let scope_name = scope_name.into();
 
-        self.wait_for_handle_start(handle, scope_name);
+        self.wait_for_handle_start(h, scope_name);
 
-        let yield_data = WaitForTaskData(handle);
+        let yield_data = WaitForTaskData(h);
 
         // Yield the fiber waiting for the task(s) to complete ...
         // >>>>>>>> (POTENTIAL) FIBER SWITCH >>>>>>>>
@@ -244,7 +261,16 @@ impl TaskSystem {
         // <<<<<<<< (POTENTIAL) FIBER SWITCH <<<<<<<<
         // ... and we're back.
 
-        self.wait_for_handle_end(handle, scope_name);
+        self.wait_for_handle_end(h, scope_name);
+
+        self.take_panics(h)
+    }
+
+    #[allow(unused_variables)]
+    fn take_panics(&self, h: &Handle) -> Result<(), TaskPanics> {
+        debug_assert!(h.is_complete());
+
+        h.take_panics().map_or(Ok(()), Err)
     }
 
     /// Tracing and profiling hooks on wait start go here.
@@ -253,14 +279,14 @@ impl TaskSystem {
         #[cfg(feature = "profiling")]
         self.profile_wait_start();
 
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "logging")]
         self.trace_wait_start(h, scope_name);
     }
 
     /// Tracing and profiling hooks on wait end go here.
     #[allow(unused_variables)]
     fn wait_for_handle_end(&self, h: &Handle, scope_name: Option<&str>) {
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "logging")]
         self.trace_wait_end(h, scope_name);
 
         #[cfg(feature = "profiling")]
@@ -323,14 +349,14 @@ impl TaskSystem {
                                 // Set the thread's current task and run it.
                                 // The task may yield.
                                 // >>>>>>>> (POTENTIAL) FIBER SWITCH >>>>>>>>
-                                self.execute_task(task);
+                                let task = self.execute_task(task);
                                 // <<<<<<<< (POTENTIAL) FIBER SWITCH <<<<<<<<
                                 // The task is finished.
                                 // We might be in a different thread if the task yielded.
 
                                 // Take the current task, decrement the task handle(s),
                                 // maybe resume a yielded fiber waiting for this task's handle.
-                                self.finish_task(self.take_task());
+                                self.finish_task(task);
 
                                 // Restore the current task.
                                 self.set_task(current_task);
@@ -374,11 +400,11 @@ impl TaskSystem {
                         // Popped a new task - execute it inline.
                         NewOrResumedTask::New(task) => {
                             // Set the thread's current task and run it.
-                            self.execute_task(task);
+                            let task = self.execute_task(task);
                             // The task is finished.
 
                             // Take the current task, decrement the task handle(s).
-                            self.finish_task(self.take_task());
+                            self.finish_task(task);
 
                             // We finished the right task / were resumed via other means - break the loop.
                             // Otherwise keep going.
@@ -536,25 +562,25 @@ impl TaskSystem {
 
         // Execute the range inline.
         if inline {
-            #[cfg(feature = "profiling")]
-            let _scope = self.profiler_scope(
-                task_name
-                    .as_ref()
-                    .map(|n| n.as_str())
-                    .unwrap_or("<unnamed>"),
-            );
+            self.before_execute_task(h, task_name.as_ref().map(String::as_str), scope_name);
 
-            f(range, self);
+            let panic = catch_unwind(AssertUnwindSafe(|| {
+                // >>>>>>>> (POTENTIAL) FIBER SWITCH >>>>>>>>
+                f(range, self);
+                // <<<<<<<< (POTENTIAL) FIBER SWITCH <<<<<<<<
+            }))
+            .err();
+
+            self.after_execute_task(h, task_name, scope_name, panic);
 
         // Spawn a task to execute the range.
         } else {
             self.submit(
                 h,
                 move |ts: &TaskSystem| {
-                    #[cfg(feature = "profiling")]
-                    let _scope = ts.profiler_scope(ts.task_name_or_unnamed());
-
+                    // >>>>>>>> (POTENTIAL) FIBER SWITCH >>>>>>>>
                     f(range, ts);
+                    // <<<<<<<< (POTENTIAL) FIBER SWITCH <<<<<<<<
                 },
                 false,
                 task_name,
@@ -565,11 +591,6 @@ impl TaskSystem {
 
     pub(crate) fn task_handle(&self) -> &Handle {
         self.thread().handle()
-    }
-
-    #[cfg(feature = "profiling")]
-    pub(crate) fn task_name_or_unnamed(&self) -> &str {
-        self.thread().task_name_or_unnamed()
     }
 
     #[cfg(feature = "profiling")]
@@ -849,14 +870,14 @@ impl TaskSystem {
                     // Set the thread's current task and run it.
                     // The task may yield if we're using fibers.
                     // >>>>>>>> (POTENTIAL) FIBER SWITCH >>>>>>>>
-                    self.execute_task(task);
+                    let task = self.execute_task(task);
                     // <<<<<<<< (POTENTIAL) FIBER SWITCH <<<<<<<<
                     // The task is finished.
                     // We might be in a different thread if the task yielded.
 
                     // Take the current task, decrement the task handle(s),
                     // maybe resume a yielded fiber waiting for this task's handle.
-                    self.finish_task(self.take_task());
+                    self.finish_task(task);
                 }
                 NewOrResumedTask::Resumed(task) => {
                     debug_assert!(self.use_fiber_pool);
@@ -912,7 +933,7 @@ impl TaskSystem {
     fn resume_task(&self, task: TaskAndFiber, yield_key: YieldKey) {
         debug_assert!(self.use_fiber_pool);
 
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "logging")]
         self.trace_resumed_task(&task, yield_key);
 
         self.task_queue
@@ -925,7 +946,7 @@ impl TaskSystem {
     fn switch_to_resumed_task(&self, task: TaskAndFiber) {
         debug_assert!(self.use_fiber_pool);
 
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "logging")]
         self.trace_picked_up_resumed_task(&task);
 
         let thread_context = self.thread_mut();
@@ -947,16 +968,22 @@ impl TaskSystem {
 
     /// Set the thread's current task and execute it.
     /// Tracing / profiling of task execution goes here.
-    fn execute_task(&self, task: Task) {
-        self.before_execute_task(&task);
+    fn execute_task(&self, task: Task) -> Task {
+        self.before_execute_task(&task.handle, task.task_name(), task.scope_name());
 
         // >>>>>>>> (POTENTIAL) FIBER SWITCH >>>>>>>>
-        self.thread_mut().execute_task(task, self);
+        let panic = self.thread_mut().execute_task(task, self).err();
         // <<<<<<<< (POTENTIAL) FIBER SWITCH <<<<<<<<
 
         // NOTE - we might be in a different thread.
 
-        self.after_execute_task(self.thread().task());
+        let mut task = self.take_task();
+
+        let task_name = task.take_task_name();
+
+        self.after_execute_task(&task.handle, task_name, task.scope_name(), panic);
+
+        task
     }
 
     /// Decrements the task counters.
@@ -989,25 +1016,76 @@ impl TaskSystem {
     }
 
     /// Trace / profile at the start of a new task.
-    fn before_execute_task(&self, task: &Task) {
-        debug_assert!(!task.is_none());
-
-        #[cfg(feature = "tracing")]
-        self.trace_picked_up_task(task);
+    #[allow(unused_variables)]
+    fn before_execute_task(&self, h: &Handle, task_name: Option<&str>, scope_name: Option<&str>) {
+        #[cfg(feature = "logging")]
+        self.trace_picked_up_task(h, task_name, scope_name);
 
         #[cfg(feature = "profiling")]
-        self.profile_before_execute_task(task.task_name_or_unnamed());
+        self.profile_before_execute_task(task_name);
     }
 
-    /// Trace / profile after the task is finished.
-    fn after_execute_task(&self, task: &Task) {
-        debug_assert!(task.is_none());
-
+    /// Trace / profile after the task is finished (or panicked).
+    #[allow(unused_variables)]
+    fn after_execute_task(
+        &self,
+        h: &Handle,
+        task_name: Option<String>,
+        scope_name: Option<&str>,
+        panic: Option<PanicPayload>,
+    ) {
         #[cfg(feature = "profiling")]
-        self.profile_after_execute_task(task.task_name_or_unnamed());
+        self.profile_after_execute_task(task_name.as_ref().map(String::as_str));
 
-        #[cfg(feature = "tracing")]
-        self.trace_finished_task(task);
+        // If the task has panicked, log / print it and add it to the handle's list.
+        if let Some(panic) = panic {
+            self.log_panicked_task(
+                h,
+                &panic,
+                task_name.as_ref().map(String::as_str),
+                scope_name,
+            );
+
+            h.add_panic(panic, task_name, scope_name.map(str::to_owned));
+        } else {
+            #[cfg(feature = "logging")]
+            self.trace_finished_task(
+                h,
+                task_name.as_ref().map(String::as_str),
+                scope_name,
+                &panic,
+            );
+        }
+    }
+
+    fn log_panicked_task(
+        &self,
+        h: &Handle,
+        panic: &PanicPayload,
+        task_name: Option<&str>,
+        scope_name: Option<&str>,
+    ) {
+        let ctx = self.thread();
+
+        let mut s = format!(
+            "[Panicked] Task: '{}', scope: '{}' [{:p} <{}>], in thread: '{}', fiber: '{}'",
+            task_name.unwrap_or("<unnamed>"),
+            scope_name.unwrap_or("<unnamed>"),
+            h,
+            h.load() - 1,
+            ctx.name_or_unnamed(),
+            ctx.fiber_name_or_unnamed(),
+        );
+        fmt_panic(&mut s, panic, 0).unwrap();
+
+        #[cfg(feature = "logging")]
+        {
+            error!("{}", s);
+        }
+        #[cfg(not(feature = "logging"))]
+        {
+            eprintln!("{}", s);
+        }
     }
 
     fn set_task(&self, task: Task) {
@@ -1018,12 +1096,12 @@ impl TaskSystem {
         self.thread_mut().take_task()
     }
 
+    fn take_task_and_fiber(&self) -> TaskAndFiber {
+        self.thread_mut().take_task_and_fiber()
+    }
+
     fn has_current_fiber(&self) -> bool {
-        if !self.use_fiber_pool {
-            false
-        } else {
-            self.thread().has_current_fiber()
-        }
+        self.use_fiber_pool && self.thread().has_current_fiber()
     }
 
     /// We're trying to yield the current fiber/task and need a new fiber for the thread to switch to.
@@ -1100,12 +1178,6 @@ impl TaskSystem {
         self.fiber_pool.get_fiber(wait)
     }
 
-    fn take_fiber(&self) -> Fiber {
-        debug_assert!(self.use_fiber_pool);
-
-        self.thread_mut().take_fiber()
-    }
-
     /// Marks the current fiber as yielded in the thread context.
     /// Only ever called if we use fibers.
     fn set_yield_key(&self, yield_key: YieldKey) {
@@ -1126,14 +1198,10 @@ impl TaskSystem {
         if yield_data.is_complete() {
             true
         } else {
-            let task = TaskAndFiber {
-                task: self.take_task(),
-                fiber: self.take_fiber(),
-            };
-
+            let task = self.take_task_and_fiber();
             let yield_key = yield_data.yield_key();
 
-            #[cfg(feature = "tracing")]
+            #[cfg(feature = "logging")]
             self.trace_yielded_task(&task, yield_key);
 
             yield_queue.yield_task(task, yield_key); // Push to `yield_queue`, status `NotReady`
@@ -1214,7 +1282,8 @@ impl Drop for TaskSystem {
     fn drop(&mut self) {
         // Make sure all tasks are finished.
         unsafe {
-            self.wait_for_handle_named(&self.global_task_handle, "Global task handle");
+            self.wait_for_handle_impl(&self.global_task_handle, Some("Global task handle"))
+                .unwrap();
         }
 
         self.shutdown_worker_threads();

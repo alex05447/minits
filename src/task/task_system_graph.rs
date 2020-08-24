@@ -30,7 +30,7 @@ impl TaskSystem {
             },
             0..num_roots,
             1,
-            task_name.as_ref().map(|n| n.as_str()),
+            task_name.as_ref().map(String::as_str),
             scope_name,
         );
     }

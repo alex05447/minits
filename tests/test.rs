@@ -6,19 +6,19 @@ use {
     },
 };
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 use std::{io::Write, sync::Once};
 
 #[cfg(feature = "task_names")]
 use std::sync::atomic::AtomicUsize;
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 extern crate log;
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 extern crate env_logger;
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 fn setup_logger_internal() {
     static INIT: Once = Once::new();
 
@@ -33,7 +33,7 @@ fn setup_logger_internal() {
 }
 
 fn setup_logger() {
-    #[cfg(feature = "tracing")]
+    #[cfg(feature = "logging")]
     setup_logger_internal();
 }
 

@@ -9,7 +9,7 @@ name = "minits"
 
 [features]
 default = []
-tracing = ["log"]
+logging = ["log"]
 task_names = []
 profiling = []
 remotery = ["miniremotery"]

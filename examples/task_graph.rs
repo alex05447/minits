@@ -3,16 +3,16 @@ use {
     minits,
 };
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 use std::{io::Write, sync::Once};
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 extern crate log;
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 extern crate env_logger;
 
-#[cfg(feature = "tracing")]
+#[cfg(feature = "logging")]
 fn setup_logger() {
     static INIT: Once = Once::new();
 
@@ -109,7 +109,7 @@ fn add_system_to_graph<'a>(
 }
 
 fn main() {
-    #[cfg(feature = "tracing")]
+    #[cfg(feature = "logging")]
     setup_logger();
 
     let builder = minits::TaskSystemBuilder::new()

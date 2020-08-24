@@ -6,14 +6,8 @@ pub use remotery::RemoteryProfiler;
 
 pub trait Profiler {
     fn init_thread(&self, thread_name: &str);
-    fn begin_scope(&self, name: &str);
+    fn begin_scope(&self, name: Option<&str>);
     fn end_scope(&self);
-}
-
-pub fn profiler_scope<'p>(profiler: &'p dyn Profiler, name: &str) -> ProfilerScope<'p> {
-    profiler.begin_scope(name);
-
-    ProfilerScope(profiler)
 }
 
 pub struct ProfilerScope<'a>(&'a dyn Profiler);

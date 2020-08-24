@@ -20,7 +20,7 @@ impl Profiler for RemoteryProfiler {
         Remotery::set_current_thread_name(thread_name);
     }
 
-    fn begin_scope(&self, name: &str) {
+    fn begin_scope(&self, name: Option<&str>) {
         Remotery::begin_cpu_sample(name, miniremotery::rmtSampleFlags::RMTSF_None);
     }
 
