@@ -328,6 +328,7 @@ Actual features:
 - Tasks are just closures which take a `TaskSystem` reference (and task range for tange tasks, slice element for slice tasks, graph vertex payload for graph tasks) and have no outputs, but may reference or take ownership their environment (bounded by the `Scope`'s lifetime) according to Rust borrow rules.
 - When added to the system, the task may run in any of the worker threads at any point during or after the call to the function (unless the task was marked as a "main" thread task - these only run on the "main" thread).
 - When the `Scope` goes out of scope, all tasks associated with it (and its handle) are *waited* on, i.e. the thread blocks until all the tasks have completed. The waiting thread might execute the tasks itself if there are any available in the queue.
+- If any of the tasks associated with a `Scope` (or any nested child tasks) panic, waiting on a `Scope` returns a list of all such panics. It's up to the caller to handle (or ignore) them.
 - When fibers are used, thread waiting for a `Scope` or async IO completion is implemented via **fiber yielding** / switching / resuming on dependency completion.
 - There exists one global mutex-locked FIFO **task queue** for all worker threads (and the main thread). This might change in the future to use lock-free task-stealing queues.
 - Tasks are pushed at one end when added to the system and picked up by worker/main threads from the other end. Threads do not busy-wait, but use the OS synchronisation primitives, so they might have to be *woken up* by the OS. This might or might not be desirable.
@@ -343,7 +344,6 @@ Actual features:
 - No task priorities.
 - No task stack size requirements.
 - No task groups (yet) for coarser level synchronisation.
-- No panic handling, or any result reporting from tasks in general. Panicking in a worker fiber bypasses the Rust runtime panic unwind machinery, resulting in unhelpful crash messages when they happen.
 - ???
 
 ## Dependencies
