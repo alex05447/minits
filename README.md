@@ -351,6 +351,7 @@ Actual features:
 - [`winapi`](https://docs.rs/winapi/*/winapi/) via crates.io.
 - If `"logging"` feature is enabled, [`log`](https://docs.rs/log/*/log/) via crates.io.
 - Win32 primitive wrappers via [`minifiber`](https://github.com/alex05447/minifiber), [`minithreadlocal`](https://github.com/alex05447/minithreadlocal) as path dependencies (TODO - github dependency?).
+- [`miniclosure`](https://github.com/alex05447/miniclosure) as a path dependency - used to represent task closures and their captures with no dynamic memory allocation when the closure occupies less than X bytes, where X ~ 56b.
 - If `"remotery"` feature is enabled, `remotery` wrapper via [`miniremotery`](`https://github.com/alex05447/miniremotery`) as a path dependency (TODO - github dependency?).
 - If `"asyncio"` feature is enabled, Win32 IO completion port wrapper via [`miniiocp`](https://github.com/alex05447/miniiocp) as a path dependency (TODO - github dependency?).
 - If `"graph"` feature is enabled, [`minigraph`](https://github.com/alex05447/minigraph) as a path dependency (TODO - github dependency?).
