@@ -1,9 +1,5 @@
 use {
-    super::{
-        task::Task,
-        task_system::YieldKey,
-        yield_queue::{TaskAndFiber, YieldQueue},
-    },
+    super::task::Task,
     std::{
         collections::VecDeque,
         sync::{Condvar, Mutex, MutexGuard},
@@ -11,12 +7,16 @@ use {
     },
 };
 
+#[cfg(feature = "fibers")]
+use super::{task_system::YieldKey, yield_queue::{TaskAndFiber, YieldQueue} };
+
 /// A task, ready for execution, returned from the task queue.
 pub(crate) enum NewOrResumedTask {
     /// A newly added task, not yet ran.
     New(Task),
     /// A resumed task, previously already ran and yielded.
     /// Only ever used if we use fibers.
+    #[cfg(feature = "fibers")]
     Resumed(TaskAndFiber),
 }
 
@@ -25,6 +25,7 @@ impl NewOrResumedTask {
     fn main_thread(&self) -> bool {
         match self {
             NewOrResumedTask::New(task) => task.main_thread,
+            #[cfg(feature = "fibers")]
             NewOrResumedTask::Resumed(task) => task.task.main_thread,
         }
     }
@@ -36,6 +37,7 @@ struct LockedTaskQueue {
     new: VecDeque<Task>,
     // Resumed tasks.
     // Only ever used if we use fibers.
+    #[cfg(feature = "fibers")]
     resumed: VecDeque<TaskAndFiber>,
     // Number of threads of this type blocked / sleeping / waiting
     // for a new / resumed task to be added to this queue.
@@ -49,6 +51,7 @@ impl LockedTaskQueue {
     fn new() -> Self {
         Self {
             new: VecDeque::new(),
+            #[cfg(feature = "fibers")]
             resumed: VecDeque::new(),
             num_waiters: 0,
             exit: false,
@@ -92,6 +95,7 @@ impl ThreadTaskQueue {
                 debug_assert!(!task.is_none());
                 queue.new.push_back(task);
             }
+            #[cfg(feature = "fibers")]
             NewOrResumedTask::Resumed(task) => {
                 // NOTE - resumed "main" task is very much not `is_none()`.
                 queue.resumed.push_back(task);
@@ -107,6 +111,7 @@ impl ThreadTaskQueue {
         }
     }
 
+    #[cfg(feature = "fibers")]
     fn try_get_resumed_task(&self) -> Option<TaskAndFiber> {
         self.lock().resumed.pop_front()
     }
@@ -122,11 +127,22 @@ impl ThreadTaskQueue {
     fn try_get_task_locked(
         queue: &mut MutexGuard<'_, LockedTaskQueue>,
     ) -> Option<NewOrResumedTask> {
-        queue
-            .resumed
-            .pop_front()
-            .map(NewOrResumedTask::Resumed)
-            .or_else(|| queue.new.pop_front().map(NewOrResumedTask::New))
+        Self::try_get_resumed_task_locked(queue).or_else(|| queue.new.pop_front().map(NewOrResumedTask::New))
+    }
+
+    #[allow(unused_variables)]
+    fn try_get_resumed_task_locked(queue: &mut MutexGuard<'_, LockedTaskQueue>) -> Option<NewOrResumedTask> {
+        #[cfg(feature = "fibers")]
+        {
+            queue
+                .resumed
+                .pop_front()
+                .map(NewOrResumedTask::Resumed)
+        }
+        #[cfg(not(feature = "fibers"))]
+        {
+            None
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, LockedTaskQueue> {
@@ -162,18 +178,20 @@ impl ThreadTaskQueue {
 ///
 /// Currently implemented as a simple `Mutex`-protected `VecDeque`, no lockless stuff going on.
 pub(crate) struct TaskQueue {
-    // Timeout duration of a wait when no new / resumed tasks are available.
-    // Should be as high as possible.
-    // Low values might lead to too many spurious wakeups and decreased efficiency.
-    // High values might expose bugs in thread wakeup logic that would otherwise be hidden.
+    /// Timeout duration of a wait when no new / resumed tasks are available.
+    /// Should be as high as possible.
+    /// Low values might lead to too many spurious wakeups and decreased efficiency.
+    /// High values might expose bugs in thread wakeup logic that would otherwise be hidden.
     wait_timeout: Duration,
 
-    // "Main" and worker thread new and resumed task queues.
+    /// "Main" and worker thread new and resumed task queues.
     main_queue: ThreadTaskQueue,
     worker_queue: ThreadTaskQueue,
 
-    // Yielded task / fiber queue.
-    // Only used if we are using fibers.
+    /// Yielded task / fiber queue.
+    ///
+    /// Only used if we use fibers.
+    #[cfg(feature = "fibers")]
     yield_queue: Mutex<YieldQueue>,
 }
 
@@ -185,6 +203,7 @@ impl TaskQueue {
             main_queue: ThreadTaskQueue::new(),
             worker_queue: ThreadTaskQueue::new(),
 
+            #[cfg(feature = "fibers")]
             yield_queue: Mutex::new(YieldQueue::new()),
         }
     }
@@ -200,6 +219,9 @@ impl TaskQueue {
     ///
     /// `main_thread` is `true` if this is called from the "main" thread,
     /// regardless if the `task` is a "main" thread task or not.
+    ///
+    /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     pub(crate) fn add_resumed_task(&self, task: TaskAndFiber, main_thread: bool) {
         self.add_task(NewOrResumedTask::Resumed(task), main_thread)
     }
@@ -207,7 +229,9 @@ impl TaskQueue {
     /// Try to check if there's any tasks / fibers ready to be resumed.
     /// If `main_thread` == `true`, checks the main thread queue first, then the worker thread queue.
     /// Else checks the worker thread queue only.
+    ///
     /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     pub(crate) fn try_get_resumed_task(&self, main_thread: bool) -> Option<TaskAndFiber> {
         if main_thread {
             self.main_queue.try_get_resumed_task()
@@ -232,13 +256,16 @@ impl TaskQueue {
         }
     }
 
+    #[cfg(feature = "fibers")]
     pub(crate) fn lock_yield_queue(&self) -> MutexGuard<'_, YieldQueue> {
         self.yield_queue.lock().unwrap()
     }
 
     /// Try to resume a `Ready` task and its fiber with the `yield_key`,
     /// or mark a `NotReady` task with the `yield_key` as now `Ready`.
+    ///
     /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     pub(crate) fn try_resume_task(&self, yield_key: YieldKey) -> Option<TaskAndFiber> {
         self.lock_yield_queue().try_resume_task(yield_key)
     }

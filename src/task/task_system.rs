@@ -1,18 +1,15 @@
 use {
     super::{
-        fiber_pool::{FiberPool, FiberPoolParams},
         panic::fmt_panic,
         task::Task,
         task_queue::{NewOrResumedTask, TaskQueue},
         thread::Thread,
         util::SendPtr,
-        yield_queue::TaskAndFiber,
     },
     crate::{
         Handle, PanicPayload, RangeTaskFn, Scope, TaskFn, TaskPanics, TaskRange,
         ThreadInitFiniCallback,
     },
-    minifiber::Fiber,
     minithreadlocal::ThreadLocal,
     std::{
         mem,
@@ -25,6 +22,12 @@ use {
         thread,
         time::Duration,
     },
+};
+
+#[cfg(feature = "fibers")]
+use {
+    super::{fiber_pool::{FiberPool, FiberPoolParams}, yield_queue::TaskAndFiber},
+    minifiber::Fiber,
 };
 
 #[cfg(feature = "asyncio")]
@@ -51,9 +54,14 @@ pub struct TaskSystem {
     worker_threads: Vec<thread::JoinHandle<()>>,
 
     /// Worker fiber pool. Initiated on startup. Never grows or shrinks.
+    #[cfg(feature = "fibers")]
     fiber_pool: FiberPool,
+
     /// If `true`, we use fibers and the fiber pool was initialized on startup with `> 0` fibers.
+    #[cfg(feature = "fibers")]
     use_fiber_pool: bool,
+
+    #[cfg(feature = "fibers")]
     allow_inline_tasks: bool,
 
     /// Used to wait for completion of all tasks added to the task system.
@@ -79,6 +87,7 @@ pub struct TaskSystem {
 }
 
 /// Returned by `try_get_fiber_to_switch_to`.
+#[cfg(feature = "fibers")]
 enum FiberToSwitchTo {
     /// Returned a previously yielded, now resumed task and its fiber.
     Resumed(TaskAndFiber),
@@ -298,7 +307,7 @@ impl TaskSystem {
     pub(crate) fn yield_current_task<Y: YieldData>(&self, yield_data: Y) {
         // We use fibers and yield from a main thread fiber / worker thread scheduler fiber / worker fiber.
         if self.has_current_fiber() {
-            debug_assert!(self.use_fiber_pool);
+            debug_assert!(self.use_fiber_pool());
 
             // Loop until the dependency is complete.
             //
@@ -331,63 +340,65 @@ impl TaskSystem {
 
                 // We have a resumed/free fiber available - switch to it.
                 // By the time `yield_to_fiber` returns, the dependency will be complete.
+                #[cfg(feature = "fibers")]
                 if let Some(fiber) = self.try_get_fiber_to_switch_to(main_thread) {
                     self.yield_to_fiber(fiber, &yield_data, main_thread);
-                    return;
+                    break;
+                }
 
                 // We have no resumed fibers / ran out of free fibers, and allow inline execution.
-                } else {
-                    debug_assert!(self.allow_inline_tasks);
+                debug_assert!(self.allow_inline_tasks());
 
-                    if let Some(task) = self.task_queue.get_task(main_thread, false) {
-                        match task {
-                            // Popped a new task - execute it inline.
-                            NewOrResumedTask::New(task) => {
-                                // Save the current task.
-                                let current_task = self.take_task();
+                if let Some(task) = self.task_queue.get_task(main_thread, false) {
+                    match task {
+                        // Popped a new task - execute it inline.
+                        NewOrResumedTask::New(task) => {
+                            // Save the current task.
+                            let current_task = self.take_task();
 
-                                // Set the thread's current task and run it.
-                                // The task may yield.
-                                // >>>>>>>> (POTENTIAL) FIBER SWITCH >>>>>>>>
-                                let task = self.execute_task(task);
-                                // <<<<<<<< (POTENTIAL) FIBER SWITCH <<<<<<<<
-                                // The task is finished.
-                                // We might be in a different thread if the task yielded.
+                            // Set the thread's current task and run it.
+                            // The task may yield.
+                            // >>>>>>>> (POTENTIAL) FIBER SWITCH >>>>>>>>
+                            let task = self.execute_task(task);
+                            // <<<<<<<< (POTENTIAL) FIBER SWITCH <<<<<<<<
+                            // The task is finished.
+                            // We might be in a different thread if the task yielded.
 
-                                // Take the current task, decrement the task handle(s),
-                                // maybe resume a yielded fiber waiting for this task's handle.
-                                self.finish_task(task);
+                            // Take the current task, decrement the task handle(s),
+                            // maybe resume a yielded fiber waiting for this task's handle.
+                            self.finish_task(task);
 
-                                // Restore the current task.
-                                self.set_task(current_task);
-
-                                // We finished the right task / were resumed via other means - break the loop.
-                                // Otherwise keep going.
-                                if yield_data.is_complete() {
-                                    return;
-                                }
-                            }
-                            // Popped a resumed task - switch to it.
-                            // By the time `yield_to_fiber` returns, the dependency will be complete.
-                            NewOrResumedTask::Resumed(task) => {
-                                self.yield_to_fiber(
-                                    FiberToSwitchTo::Resumed(task),
-                                    &yield_data,
-                                    main_thread,
-                                );
-                                return;
-                            }
+                            // Restore the current task.
+                            self.set_task(current_task);
+                        }
+                        // Popped a resumed task - switch to it.
+                        // By the time `yield_to_fiber` returns, the dependency will be complete.
+                        #[cfg(feature = "fibers")]
+                        NewOrResumedTask::Resumed(task) => {
+                            self.yield_to_fiber(
+                                FiberToSwitchTo::Resumed(task),
+                                &yield_data,
+                                main_thread,
+                            );
+                            break;
                         }
                     }
-
-                    // TODO - FIXME
-                    thread::yield_now();
                 }
+
+                // We finished the right task / were resumed via other means - break the loop.
+                // Otherwise keep going.
+                if yield_data.is_complete() {
+                    break;
+                }
+
+                // TODO - FIXME
+                thread::yield_now();
+
             } // loop
 
         // We're not using fibers at all.
         } else {
-            debug_assert!(!self.use_fiber_pool);
+            debug_assert!(!self.use_fiber_pool());
 
             // Save the current task.
             let current_task = self.take_task();
@@ -395,7 +406,7 @@ impl TaskSystem {
             // (Busy) loop, executing tasks inline until the yield dependency completes.
             // The tasks may not yield.
             loop {
-                if let Some(task) = self.task_queue.get_task(self.is_main_thread(), true) {
+                if let Some(task) = self.task_queue.get_task(self.is_main_thread(), false) {
                     match task {
                         // Popped a new task - execute it inline.
                         NewOrResumedTask::New(task) => {
@@ -405,22 +416,24 @@ impl TaskSystem {
 
                             // Take the current task, decrement the task handle(s).
                             self.finish_task(task);
-
-                            // We finished the right task / were resumed via other means - break the loop.
-                            // Otherwise keep going.
-                            if yield_data.is_complete() {
-                                break;
-                            }
                         }
                         // This may not happen if we're not using fibers.
+                        #[cfg(feature = "fibers")]
                         NewOrResumedTask::Resumed(_) => {
                             unreachable!();
                         }
                     }
                 }
 
+                // We finished the right task / were resumed via other means - break the loop.
+                // Otherwise keep going.
+                if yield_data.is_complete() {
+                    break;
+                }
+
                 // TODO - FIXME
                 thread::yield_now();
+
             } // loop
 
             // Restore the current task.
@@ -599,6 +612,7 @@ impl TaskSystem {
     }
 
     /// Creates an uninitialized task system instance to be boxed and fully initialized later.
+    #[allow(unused_variables)]
     pub(crate) fn new(
         num_worker_threads: u32,
         task_wait_timeout: Duration,
@@ -620,8 +634,13 @@ impl TaskSystem {
 
             worker_threads: Vec::with_capacity(num_worker_threads as _),
 
+            #[cfg(feature = "fibers")]
             fiber_pool: FiberPool::new(fiber_wait_timeout),
+
+            #[cfg(feature = "fibers")]
             use_fiber_pool: false,
+
+            #[cfg(feature = "fibers")]
             allow_inline_tasks,
 
             global_task_handle: Handle::new(),
@@ -643,6 +662,7 @@ impl TaskSystem {
 
     /// Initialize the fiber pool with `num_fibers` > `0` worker fibers with `stack_size` bytes of stack space.
     /// NOTE - `self` must be allocated on the heap as the pointer is used by the fiber entry point.
+    #[cfg(feature = "fibers")]
     pub(crate) fn init_fiber_pool(&mut self, num_fibers: u32, stack_size: usize) {
         debug_assert!(num_fibers > 0);
 
@@ -714,7 +734,8 @@ impl TaskSystem {
         let mut thread_context = Thread::new(main_thread_name.to_owned(), 0, None);
 
         // No need to convert to a fiber if we're not using fibers.
-        if self.use_fiber_pool {
+        #[cfg(feature = "fibers")]
+        if self.use_fiber_pool() {
             let main_fiber = Fiber::from_thread("Main thread fiber".to_owned()).unwrap();
             thread_context.set_fiber(main_fiber);
         }
@@ -743,6 +764,7 @@ impl TaskSystem {
     }
 
     /// Worker fiber entry point.
+    #[cfg(feature = "fibers")]
     fn fiber_entry_point(&self) {
         // If this fiber was just picked up, we might need to cleanup from the previous fiber.
         self.cleanup_previous_fiber();
@@ -783,13 +805,16 @@ impl TaskSystem {
         // Run the scheduler loop.
 
         // If we're using fibers, get and switch to a new worker fiber.
-        if self.use_fiber_pool {
-            // Must succeed - we allocated enough for all threads.
-            let fiber = FiberToSwitchTo::Free(self.fiber_pool.get_fiber(false).unwrap());
+        if self.use_fiber_pool() {
+            #[cfg(feature = "fibers")]
+            {
+                // Must succeed - we allocated enough for all threads.
+                let fiber = FiberToSwitchTo::Free(self.fiber_pool.get_fiber(false).unwrap());
 
-            // >>>>>>>> FIBER SWITCH >>>>>>>>
-            self.switch_to_fiber(fiber);
-        // <<<<<<<< FIBER SWITCH <<<<<<<<
+                // >>>>>>>> FIBER SWITCH >>>>>>>>
+                self.switch_to_fiber(fiber);
+                // <<<<<<<< FIBER SWITCH <<<<<<<<
+            }
 
         // If we're not using fibers, run the scheduler loop inline.
         } else {
@@ -822,10 +847,12 @@ impl TaskSystem {
             profiler.init_thread(&worker_thread_name);
         }
 
+        #[allow(unused_mut)]
         let mut thread_context = Thread::new(worker_thread_name, worker_index + 1, thread_fini);
 
         // Don't convert to a scheduler fiber if we're not using fibers.
-        if self.use_fiber_pool {
+        #[cfg(feature = "fibers")]
+        if self.use_fiber_pool() {
             let fiber_name = format!("Worker thread {} fiber", worker_index);
             thread_context.set_thread_fiber(Fiber::from_thread(fiber_name).unwrap());
         }
@@ -879,8 +906,9 @@ impl TaskSystem {
                     // maybe resume a yielded fiber waiting for this task's handle.
                     self.finish_task(task);
                 }
+                #[cfg(feature = "fibers")]
                 NewOrResumedTask::Resumed(task) => {
-                    debug_assert!(self.use_fiber_pool);
+                    debug_assert!(self.use_fiber_pool());
 
                     // Yes, there's a resumed fiber - prepare the context and switch to it.
                     // >>>>>>>> FIBER SWITCH >>>>>>>>
@@ -905,6 +933,9 @@ impl TaskSystem {
 
     /// Switch to the current thread's thread fiber.
     /// Called from worker fibers on task system shutdown.
+    ///
+    /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     fn switch_to_thread_fiber(&self) {
         self.thread_mut().switch_to_thread_fiber();
     }
@@ -912,8 +943,9 @@ impl TaskSystem {
     /// If the previous fiber run by this thread needs to be freed (i.e. it resumed the current fiber), free it.
     /// If the previous fiber run by this thread was yielded, make it ready to be resumed, or resume it if yield dependency is already complete.
     /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     fn cleanup_previous_fiber(&self) {
-        debug_assert!(self.use_fiber_pool);
+        debug_assert!(self.use_fiber_pool());
 
         let thread_context = self.thread_mut();
 
@@ -930,8 +962,9 @@ impl TaskSystem {
 
     /// Only ever called if we use fibers.
     #[allow(unused_variables)]
+    #[cfg(feature = "fibers")]
     fn resume_task(&self, task: TaskAndFiber, yield_key: YieldKey) {
-        debug_assert!(self.use_fiber_pool);
+        debug_assert!(self.use_fiber_pool());
 
         #[cfg(feature = "logging")]
         self.trace_resumed_task(&task, yield_key);
@@ -942,9 +975,11 @@ impl TaskSystem {
 
     /// Prepare the thread context - current task / fiber - and switch to the resumed fiber.
     /// Current fiber will be returned to the pool.
+    ///
     /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     fn switch_to_resumed_task(&self, task: TaskAndFiber) {
-        debug_assert!(self.use_fiber_pool);
+        debug_assert!(self.use_fiber_pool());
 
         #[cfg(feature = "logging")]
         self.trace_picked_up_resumed_task(&task);
@@ -994,10 +1029,12 @@ impl TaskSystem {
     fn finish_task(&self, task: Task) {
         debug_assert!(task.is_none());
 
+        #[allow(unused_variables)]
         let finished = task.dec();
         self.global_task_handle.dec();
 
-        if finished && self.use_fiber_pool {
+        #[cfg(feature = "fibers")]
+        if finished && self.use_fiber_pool() {
             let yield_key = task.handle.yield_key();
 
             self.try_resume_task(yield_key);
@@ -1006,9 +1043,11 @@ impl TaskSystem {
 
     /// Make `Ready` the task with the `yield_key`.
     /// If already `Ready`, pop from the yield queue and push to resumed queue.
+    ///
     /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     pub(crate) fn try_resume_task(&self, yield_key: YieldKey) {
-        debug_assert!(self.use_fiber_pool);
+        debug_assert!(self.use_fiber_pool());
 
         if let Some(task) = self.task_queue.try_resume_task(yield_key) {
             self.resume_task(task, yield_key);
@@ -1096,12 +1135,45 @@ impl TaskSystem {
         self.thread_mut().take_task()
     }
 
+    #[cfg(feature = "fibers")]
     fn take_task_and_fiber(&self) -> TaskAndFiber {
         self.thread_mut().take_task_and_fiber()
     }
 
+    fn use_fiber_pool(&self) -> bool {
+        #[cfg(feature = "fibers")]
+        {
+            self.use_fiber_pool
+        }
+
+        #[cfg(not(feature = "fibers"))]
+        {
+            false
+        }
+    }
+
     fn has_current_fiber(&self) -> bool {
-        self.use_fiber_pool && self.thread().has_current_fiber()
+        #[cfg(feature = "fibers")]
+        {
+            self.use_fiber_pool() && self.thread().has_current_fiber()
+        }
+
+        #[cfg(not(feature = "fibers"))]
+        {
+            false
+        }
+    }
+
+    fn allow_inline_tasks(&self) -> bool {
+        #[cfg(feature = "fibers")]
+        {
+            self.allow_inline_tasks
+        }
+
+        #[cfg(not(feature = "fibers"))]
+        {
+            false
+        }
     }
 
     /// We're trying to yield the current fiber/task and need a new fiber for the thread to switch to.
@@ -1112,10 +1184,11 @@ impl TaskSystem {
     /// If `main_thread` is `false`, does not return resumed "main" thread tasks.
     ///
     /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     fn try_get_fiber_to_switch_to(&self, main_thread: bool) -> Option<FiberToSwitchTo> {
-        debug_assert!(self.use_fiber_pool);
+        debug_assert!(self.use_fiber_pool());
 
-        let wait = !self.allow_inline_tasks;
+        let wait = !self.allow_inline_tasks();
 
         // Check if any yielded fibers are ready to be resumed.
         self.task_queue
@@ -1136,13 +1209,14 @@ impl TaskSystem {
     /// regardless if the `task` is a "main" thread task or not.
     ///
     /// Only ever called if we're using fibers.
+    #[cfg(feature = "fibers")]
     fn yield_to_fiber<Y: YieldData>(
         &self,
         fiber: FiberToSwitchTo,
         yield_data: &Y,
         main_thread: bool,
     ) {
-        debug_assert!(self.use_fiber_pool);
+        debug_assert!(self.use_fiber_pool());
 
         // If the yield dependency is still incomplete, we push the current fiber/task to the yield queue ...
         if self.try_yield_current_task(yield_data) {
@@ -1171,26 +1245,31 @@ impl TaskSystem {
     /// If the pool is empty and `wait` is `true`, the method blocks / sleeps the calling thread
     /// until a fiber is freed to the pool and is successfully returned.
     ///
-    /// Only ever called if we're using fibers.
+    /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     fn try_get_free_fiber(&self, wait: bool) -> Option<Fiber> {
-        debug_assert!(self.use_fiber_pool);
+        debug_assert!(self.use_fiber_pool());
 
         self.fiber_pool.get_fiber(wait)
     }
 
     /// Marks the current fiber as yielded in the thread context.
+    ///
     /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     fn set_yield_key(&self, yield_key: YieldKey) {
-        debug_assert!(self.use_fiber_pool);
+        debug_assert!(self.use_fiber_pool());
 
         self.thread_mut().set_yield_key(yield_key)
     }
 
     /// Returns `true` if the `yield_data` dependency is complete and there's no need to yield the current task.
     /// Otherwise takes the current task / fiber, adds them to the yield queue with the `yield_data`'s `YieldKey` and returns `false`.
+    ///
     /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     fn try_yield_current_task<Y: YieldData>(&self, yield_data: &Y) -> bool {
-        debug_assert!(self.use_fiber_pool);
+        debug_assert!(self.use_fiber_pool());
 
         // It's important to lock the yield queue first, before calling `YieldData::is_complete()`.
         let mut yield_queue = self.task_queue.lock_yield_queue();
@@ -1216,8 +1295,9 @@ impl TaskSystem {
     /// regardless if the `task` is a "main" thread task or not.
     ///
     /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     fn return_fiber_to_switch_to(&self, fiber: FiberToSwitchTo, main_thread: bool) {
-        debug_assert!(self.use_fiber_pool);
+        debug_assert!(self.use_fiber_pool());
 
         match fiber {
             FiberToSwitchTo::Resumed(task) => {
@@ -1233,8 +1313,9 @@ impl TaskSystem {
     /// or to a free scheduler / worker fiber.
     ///
     /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     fn switch_to_fiber(&self, fiber: FiberToSwitchTo) {
-        debug_assert!(self.use_fiber_pool);
+        debug_assert!(self.use_fiber_pool());
 
         let thread_context = self.thread_mut();
 
@@ -1292,10 +1373,12 @@ impl Drop for TaskSystem {
         self.shutdown_fs_thread();
 
         // Free the thread context.
+        #[allow(unused_variables, unused_mut)]
         let mut thread_context = unsafe { self.thread.take_unchecked() };
 
         // Drop the main thread's fiber, converting it back to a normal thread.
-        if self.use_fiber_pool {
+        #[cfg(feature = "fibers")]
+        if self.use_fiber_pool() {
             let current_fiber = thread_context.take_fiber();
             debug_assert!(current_fiber.is_thread_fiber());
             debug_assert_eq!(current_fiber.name().unwrap(), "Main thread fiber");

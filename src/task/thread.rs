@@ -1,12 +1,14 @@
 use {
-    super::{task::Task, task_system::YieldKey, yield_queue::TaskAndFiber},
+    super::task::Task,
     crate::{Handle, PanicPayload, TaskSystem, ThreadInitFiniCallback},
-    minifiber::Fiber,
     std::{
         panic::{catch_unwind, AssertUnwindSafe},
         sync::Arc,
     },
 };
+
+#[cfg(feature = "fibers")]
+use { minifiber::Fiber, super::{ yield_queue::TaskAndFiber, task_system::YieldKey } };
 
 /// Per-thread task system state.
 /// Intended to be thread-local.
@@ -23,21 +25,25 @@ pub(crate) struct Thread {
     /// created from the worker thread before the thread exits
     /// for thread cleanup to work properly.
     /// Worker threads keep their initial fiber here.
+    #[cfg(feature = "fibers")]
     thread_fiber: Option<Fiber>,
 
     /// Worker thread finalizer callback is stored here to be ran when the worker thread is about to exit.
     fini: Option<Arc<dyn ThreadInitFiniCallback>>,
 
     /// Current fiber ran by the thread, set before the switch.
+    #[cfg(feature = "fibers")]
     fiber: Option<Fiber>,
 
     /// Current task ran by the thread.
     task: Option<Task>,
 
     /// Previous fiber ran by the thread, to be returned to the fiber pool.
+    #[cfg(feature = "fibers")]
     fiber_to_free: Option<Fiber>,
 
     /// Yield key of the previous fiber ran by the thread, now yielded.
+    #[cfg(feature = "fibers")]
     yield_key: Option<YieldKey>,
 }
 
@@ -54,15 +60,19 @@ impl Thread {
             #[cfg(feature = "logging")]
             name: name.into(),
 
+            #[cfg(feature = "fibers")]
             thread_fiber: None,
 
             fini,
 
+            #[cfg(feature = "fibers")]
             fiber: None,
             task: None,
 
+            #[cfg(feature = "fibers")]
             fiber_to_free: None,
 
+            #[cfg(feature = "fibers")]
             yield_key: None,
         }
     }
@@ -88,6 +98,7 @@ impl Thread {
         "<unnamed>"
     }
 
+    #[cfg(feature = "fibers")]
     pub(crate) fn set_thread_fiber(&mut self, fiber: Fiber) {
         if self.thread_fiber.replace(fiber).is_some() {
             panic!("thread fiber set more than once");
@@ -96,6 +107,7 @@ impl Thread {
 
     /// Takes the thread fiber and switches the thread to it.
     /// Called once on task system shutdown.
+    #[cfg(feature = "fibers")]
     pub(crate) fn switch_to_thread_fiber(&mut self) {
         // >>>>>>>> FIBER SWITCH >>>>>>>>
         self.thread_fiber
@@ -106,23 +118,35 @@ impl Thread {
     }
 
     pub(crate) fn fiber_name_or_unnamed(&self) -> &str {
-        self.fiber
-            .as_ref()
-            .map_or("<none>", |fiber| fiber.name().unwrap_or("<unnamed>"))
+        #[cfg(feature = "fibers")]
+        {
+            self.fiber
+                .as_ref()
+                .map_or("<none>", |fiber| fiber.name().unwrap_or("<unnamed>"))
+        }
+        #[cfg(not(feature = "fibers"))]
+        {
+            "<none>"
+        }
     }
 
+    #[cfg(feature = "fibers")]
     pub(crate) fn has_current_fiber(&self) -> bool {
         self.fiber.is_some()
     }
 
     /// Set the thread's current fiber.
     /// Called before switching to it.
+    ///
+    /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     pub(crate) fn set_fiber(&mut self, fiber: Fiber) {
         if self.fiber.replace(fiber).is_some() {
             panic!("current fiber set more than once")
         }
     }
 
+    #[cfg(feature = "fibers")]
     pub(crate) fn switch_to_current_fiber(&self) {
         // >>>>>>>> FIBER SWITCH >>>>>>>>
         self.fiber
@@ -132,6 +156,7 @@ impl Thread {
         // <<<<<<<< FIBER SWITCH <<<<<<<<
     }
 
+    #[cfg(feature = "fibers")]
     pub(crate) fn take_fiber(&mut self) -> Fiber {
         self.fiber.take().expect("current fiber not set")
     }
@@ -184,6 +209,7 @@ impl Thread {
         self.task.take().expect("current task not set")
     }
 
+    #[cfg(feature = "fibers")]
     pub(crate) fn take_task_and_fiber(&mut self) -> TaskAndFiber {
         TaskAndFiber {
             task: self.task.take().expect("current task not set"),
@@ -215,6 +241,9 @@ impl Thread {
 
     /// Take the currently set fiber and assign it to to-free fiber,
     /// to be returned to the fiber pool by the next fiber ran by this thread.
+    ///
+    /// Only ever called if we use fibers.
+    #[cfg(feature = "fibers")]
     pub(crate) fn free_fiber(&mut self) {
         let fiber = self.take_fiber();
         if self.fiber_to_free.replace(fiber).is_some() {
@@ -222,17 +251,20 @@ impl Thread {
         }
     }
 
+    #[cfg(feature = "fibers")]
     pub(crate) fn take_fiber_to_free(&mut self) -> Option<Fiber> {
         self.fiber_to_free.take()
     }
 
     /// Set the yield key of the fiber to be freed.
+    #[cfg(feature = "fibers")]
     pub(crate) fn set_yield_key(&mut self, yield_key: YieldKey) {
         if self.yield_key.replace(yield_key).is_some() {
             panic!("yield key set more than once");
         }
     }
 
+    #[cfg(feature = "fibers")]
     pub(crate) fn take_yield_key(&mut self) -> Option<YieldKey> {
         self.yield_key.take()
     }

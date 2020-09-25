@@ -44,8 +44,12 @@ impl<F: Fn(u32) + Send + Sync + 'static> ThreadInitFiniCallback for F {}
 /// [`init_task_system`]: fn.init_task_system.html
 pub struct TaskSystemBuilder {
     num_worker_threads: u32,
+
+    #[cfg(feature = "fibers")]
     num_fibers: u32,
+    #[cfg(feature = "fibers")]
     allow_inline_tasks: bool,
+    #[cfg(feature = "fibers")]
     fiber_stack_size: usize,
 
     thread_init: Option<Arc<dyn ThreadInitFiniCallback>>,
@@ -61,15 +65,24 @@ impl TaskSystemBuilder {
 
         // TODO - look at / tweak these params (esp. `num_fibers`, `fiber_stack_size`).
         let num_worker_threads = num_physical_cores - 1;
+
+        #[cfg(feature = "fibers")]
         let num_fibers = num_physical_cores * 4;
+        #[cfg(feature = "fibers")]
         let allow_inline_tasks = true;
+        #[cfg(feature = "fibers")]
         let fiber_stack_size = 1024 * 1024; // 1 Mb
 
         Self {
             num_worker_threads,
+
+            #[cfg(feature = "fibers")]
             num_fibers,
+            #[cfg(feature = "fibers")]
             allow_inline_tasks,
+            #[cfg(feature = "fibers")]
             fiber_stack_size,
+
             thread_init: None,
             thread_fini: None,
 
@@ -126,8 +139,11 @@ impl TaskSystemBuilder {
     ///
     /// [`task system`]: struct.TaskSystem.html
     /// [`allow_inline_tasks`]: #method.allow_inline_tasks
+    #[allow(unused_variables, unused_mut)]
     pub fn num_fibers(mut self, num_fibers: u32) -> Self {
-        self.num_fibers = num_fibers;
+        #[cfg(feature = "fibers")] {
+            self.num_fibers = num_fibers;
+        }
         self
     }
 
@@ -145,8 +161,11 @@ impl TaskSystemBuilder {
     /// [`task system`]: struct.TaskSystem.html
     /// [`num_fibers`]: #method.num_fibers
     /// [`allow_inline_tasks`]: #method.allow_inline_tasks
+    #[allow(unused_variables, unused_mut)]
     pub fn allow_inline_tasks(mut self, allow_inline_tasks: bool) -> Self {
-        self.allow_inline_tasks = allow_inline_tasks;
+        #[cfg(feature = "fibers")] {
+            self.allow_inline_tasks = allow_inline_tasks;
+        }
         self
     }
 
@@ -157,8 +176,11 @@ impl TaskSystemBuilder {
     ///
     /// [`num_fibers`]: #method.num_fibers
     /// [`allow_inline_tasks`]: #method.allow_inline_tasks
+    #[allow(unused_variables, unused_mut)]
     pub fn fiber_stack_size(mut self, fiber_stack_size: usize) -> Self {
-        self.fiber_stack_size = fiber_stack_size;
+        #[cfg(feature = "fibers")] {
+            self.fiber_stack_size = fiber_stack_size;
+        }
         self
     }
 
@@ -212,24 +234,26 @@ impl TaskSystemBuilder {
             num_worker_threads,
             task_wait_timeout,
             fiber_wait_timeout,
-            self.allow_inline_tasks,
+            self.get_allow_inline_tasks(),
         ));
 
-        let num_fibers = self.num_fibers;
-        let stack_size = self.fiber_stack_size;
+        let num_fibers = self.get_num_fibers();
+        let stack_size = self.get_fiber_stack_size();
 
         // Skip fiber pool initialization if we're not using fibers.
-        if num_fibers > 0 {
-            // Otherwise add a fiber per worker thread on top.
-            let num_fibers = num_fibers + num_worker_threads;
-            task_system.init_fiber_pool(num_fibers, stack_size);
+        #[cfg(feature = "fibers")] {
+            if num_fibers > 0 {
+                // Otherwise add a fiber per worker thread on top.
+                let num_fibers = num_fibers + num_worker_threads;
+                task_system.init_fiber_pool(num_fibers, stack_size);
+            }
         }
 
         // If we use fibers and don't allow inline tasks, worker threads only need a small stack.
         // Otherwise tasks will / may be executed on the worker threads' stacks
         // (and the "main" thread stack - but we have no control over that)
         // and we need to respect the user-provided stack size.
-        let need_large_worker_thread_stack = num_fibers == 0 || self.allow_inline_tasks;
+        let need_large_worker_thread_stack = num_fibers == 0 || self.get_allow_inline_tasks();
         let worker_stack_size = if need_large_worker_thread_stack {
             stack_size
         } else {
@@ -256,5 +280,41 @@ impl TaskSystemBuilder {
         task_system.start_threads();
 
         task_system
+    }
+
+    fn get_num_fibers(&self) -> u32 {
+        #[cfg(feature = "fibers")]
+        {
+            self.num_fibers
+        }
+
+        #[cfg(not(feature = "fibers"))]
+        {
+            0
+        }
+    }
+
+    fn get_fiber_stack_size(&self) -> usize {
+        #[cfg(feature = "fibers")]
+        {
+            self.fiber_stack_size
+        }
+
+        #[cfg(not(feature = "fibers"))]
+        {
+            0
+        }
+    }
+
+    fn get_allow_inline_tasks(&self) -> bool {
+        #[cfg(feature = "fibers")]
+        {
+            self.allow_inline_tasks
+        }
+
+        #[cfg(not(feature = "fibers"))]
+        {
+            false
+        }
     }
 }

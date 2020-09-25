@@ -9,6 +9,7 @@ name = "minits"
 
 [features]
 default = []
+fibers = ["minifiber"]
 logging = ["log"]
 task_names = []
 profiling = []
@@ -20,7 +21,7 @@ graph = ["minigraph"]
 log = { version = "0.4", optional = true }
 
 miniclosure = { path = "../miniclosure" }
-minifiber = { path = "../minifiber" }
+minifiber = { path = "../minifiber", optional = true }
 minithreadlocal = { path = "../minithreadlocal" }
 miniremotery = { path = "../miniremotery", optional = true }
 miniiocp = { path = "../miniiocp", optional = true }

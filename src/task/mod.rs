@@ -1,5 +1,4 @@
 mod builder;
-mod fiber_pool;
 mod handle;
 mod panic;
 mod scope;
@@ -9,6 +8,11 @@ mod task_system;
 mod task_system_singleton;
 mod thread;
 mod util;
+
+#[cfg(feature = "fibers")]
+mod fiber_pool;
+
+#[cfg(feature = "fibers")]
 mod yield_queue;
 
 #[cfg(feature = "logging")]
