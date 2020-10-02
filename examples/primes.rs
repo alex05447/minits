@@ -160,7 +160,7 @@ fn primes_in_range_serial(range: &Range<u32>) -> Vec<u32> {
     primes
 }
 
-fn primes_in_range_parallel(range: &Range<u32>, multiplier: u32) -> Vec<u32> {
+fn primes_in_range_parallel(range: &Range<u32>, chunks_per_thread: u32) -> Vec<u32> {
     let range = range.clone();
     let mut primes = Vec::new();
 
@@ -174,7 +174,7 @@ fn primes_in_range_parallel(range: &Range<u32>, multiplier: u32) -> Vec<u32> {
             primes_in_range_internal(&range, |num| tx.send(num).unwrap())
         })
         .name("Parallel primes")
-        .multiplier(multiplier);
+        .fork_method(minits::ForkMethod::ChunksPerThread(chunks_per_thread));
 
     // If `true`, main thread helps the worker threads by executing spawned tasks.
     // After all tasks are complete, we have a full queue of generated primes.

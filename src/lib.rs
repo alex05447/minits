@@ -14,7 +14,7 @@ pub use {
     task::{
         fini_task_system, init_task_system, task_system, Handle, PanicPayload, RangeTaskFn, Scope,
         ScopedRangeTask, ScopedTask, SliceTaskFn, TaskFn, TaskPanicInfo, TaskPanics, TaskRange,
-        TaskSystem, TaskSystemBuilder, ThreadInitFiniCallback,
+        TaskSystem, TaskSystemBuilder, ThreadInitFiniCallback, ForkMethod
     },
 };
 

@@ -34,7 +34,7 @@ pub use {
     builder::{TaskSystemBuilder, ThreadInitFiniCallback},
     handle::Handle,
     panic::{PanicPayload, TaskPanicInfo, TaskPanics},
-    scope::{RangeTaskFn, Scope, ScopedRangeTask, ScopedTask, SliceTaskFn, TaskFn, TaskRange},
+    scope::{RangeTaskFn, Scope, ScopedRangeTask, ScopedTask, SliceTaskFn, TaskFn, TaskRange, ForkMethod},
     task_system::TaskSystem,
     task_system_singleton::{fini_task_system, init_task_system, task_system},
 };

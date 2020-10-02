@@ -8,7 +8,7 @@ use {
     },
     crate::{
         Handle, PanicPayload, RangeTaskFn, Scope, TaskFn, TaskPanics, TaskRange,
-        ThreadInitFiniCallback,
+        ThreadInitFiniCallback, ForkMethod,
     },
     minithreadlocal::ThreadLocal,
     std::{
@@ -209,7 +209,7 @@ impl TaskSystem {
         h: &'h Handle,
         f: F,
         range: TaskRange,
-        multiplier: u32,
+        fork_method: ForkMethod,
         task_name: Option<&str>,
         scope_name: Option<&str>,
     ) where
@@ -225,7 +225,10 @@ impl TaskSystem {
         // Including the main thread.
         let num_threads = (self.worker_threads.len() + 1) as u32;
 
-        let num_chunks = (num_threads * multiplier).min(range_size);
+        let num_chunks = match fork_method {
+            ForkMethod::ChunksPerThread(chunks_per_thread) => (num_threads * chunks_per_thread).min(range_size),
+            ForkMethod::TaskPerElement => range_size,
+        };
 
         #[cfg(feature = "logging")]
         self.trace_fork_task_range(h, &range, num_chunks, task_name, scope_name);

@@ -201,7 +201,7 @@ fn main() {
             // Split into `1` * `num_threads` chunks.
             // More chunks means better load-balancing, but more
             // task system overhead.
-            .multiplier(1)
+            .fork_method(minits::ForkMethod::ChunksPerThread(1))
             .name("My very own parallel-for");
 
         // Implementation uses recursive range subdivision with forking

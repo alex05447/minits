@@ -18,13 +18,17 @@ See `examples\readme.rs`.
 
 ---
 ```rust
-use std::mem;
-use std::sync::atomic::{ AtomicU32, Ordering };
+use {
+    minithreadlocal::ThreadLocal,
+    minits,
+    std::{
+        mem,
+        sync::atomic::{AtomicU32, Ordering},
+    },
+};
 
 #[cfg(feature = "asyncio")]
 use std::fs;
-
-use minits;
 
 fn main() {
     // Default task system parameters:
@@ -198,7 +202,7 @@ fn main() {
             // Split into `1` * `num_threads` chunks.
             // More chunks means better load-balancing, but more
             // task system overhead.
-            .multiplier(1)
+            .fork_method(minits::ForkMethod::ChunksPerThread(1))
             .name("My very own parallel-for");
 
         // Implementation uses recursive range subdivision with forking

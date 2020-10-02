@@ -119,6 +119,28 @@ pub trait RangeTaskFn<'t>: Fn(TaskRange, &TaskSystem) + Send + Clone + 't {}
 
 impl<'t, F: Fn(TaskRange, &TaskSystem) + Send + Clone + 't> RangeTaskFn<'t> for F {}
 
+/// Determines how the [`task range`] is forked / split / subdivided / distributed into tasks
+/// between the [`TaskSystem`] threads.
+///
+/// [`task range`]: type.TaskRange.html
+/// [`TaskSystem`]: struct.TaskSystem.html
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ForkMethod {
+    /// The [`task range`] is forked / split / subdivided / distributed into this many chunks
+    /// over the number of [`TaskSystem`] threads (including the "main" thread).
+    ///
+    /// E.g., the (default) value of `1` means that the range will be split in (ideally) equally sized chunks with one chunk per thread,
+    /// `2` means two half-sized chunks per thread (i.e. task oversubscription), etc.
+    ///
+    /// [`task range`]: type.TaskRange.html
+    /// [`TaskSystem`]: struct.TaskSystem.html
+    ChunksPerThread(u32),
+    /// An individual task is spawned for each element of the [`task range`].
+    ///
+    /// [`task range`]: type.TaskRange.html
+    TaskPerElement,
+}
+
 /// Trait for a "slice" task, executed by the [`TaskSystem`] -
 /// a function/closure which takes a reference to a slice element and a [`TaskSystem`] argument, returns nothing, may execute multiple times, is cloneable
 /// and must be safe to send to another thread.
@@ -142,7 +164,7 @@ where
     scope: &'t mut Scope<'h, 'ts>,
     task: Option<F>,
     range: TaskRange,
-    multiplier: u32,
+    fork_method: ForkMethod,
     name: Option<Cow<'n, str>>,
 }
 
@@ -155,22 +177,20 @@ where
             scope,
             task: Some(f),
             range,
-            multiplier: 1,
+            fork_method: ForkMethod::ChunksPerThread(1),
             name: None,
         }
     }
 
-    /// Sets the task's range subdivision `multiplier`.
+    /// Sets the [`task range`] [`fork method`].
     ///
-    /// The task's [`range`] is distributed over the number of [`TaskSystem`] threads (including the "main" thread),
-    /// multiplied by `multiplier` (i.e., `multiplier` == `2` means "divide the range into `2` chunks per thread").
+    /// By default, the `fork_method` is [`ChunksPerThread(1)`].
     ///
-    /// By default, the `multiplier` is `1`.
-    ///
-    /// [`range`]: type.TaskRange.html
-    /// [`TaskSystem`]: struct.TaskSystem.html
-    pub fn multiplier(mut self, multiplier: u32) -> Self {
-        self.multiplier = multiplier;
+    /// [`task range`]: type.TaskRange.html
+    /// [`fork method`]: enum.ForkMethod.html
+    /// [`ChunksPerThread(1)`]: enum.ForkMethod.html#variant.ChunksPerThread
+    pub fn fork_method(mut self, fork_method: ForkMethod) -> Self {
+        self.fork_method = fork_method;
         self
     }
 
@@ -208,7 +228,7 @@ where
         if let Some(task) = self.task.take() {
             let range = self.range.clone();
             let name = self.take_name();
-            self.scope.submit_range(task, range, self.multiplier, name);
+            self.scope.submit_range(task, range, self.fork_method, name);
         }
     }
 }
@@ -527,7 +547,7 @@ impl<'h, 'ts> Scope<'h, 'ts> {
     ///
     /// [`range task`]: struct.ScopedRangeTask.html
     /// [`TaskSystem`]: struct.TaskSystem.html
-    fn submit_range<F>(&mut self, f: F, range: TaskRange, multiplier: u32, name: Option<String>)
+    fn submit_range<F>(&mut self, f: F, range: TaskRange, fork_method: ForkMethod, name: Option<String>)
     where
         F: RangeTaskFn<'h>,
     {
@@ -536,7 +556,7 @@ impl<'h, 'ts> Scope<'h, 'ts> {
                 self.handle,
                 f,
                 range,
-                multiplier,
+                fork_method,
                 name.as_ref().map(String::as_str),
                 self.name(),
             );
