@@ -338,7 +338,7 @@ impl TaskSystem {
             // - we'll run a busy loop (with a tiny `yield_now()`) until we hit any of the cases above;
             // this is similar to case 3) above; while case 3) sleeps *too much* and might miss a resumed task becoming available,
             // this case does not sleep *at all*.
-            loop {
+            'wait: loop {
                 let main_thread = self.is_main_thread();
 
                 // We have a resumed/free fiber available - switch to it.
@@ -352,7 +352,7 @@ impl TaskSystem {
                 // We have no resumed fibers / ran out of free fibers, and allow inline execution.
                 debug_assert!(self.allow_inline_tasks());
 
-                if let Some(task) = self.task_queue.get_task(main_thread, false) {
+                while let Some(task) = self.task_queue.get_task(main_thread, false) {
                     match task {
                         // Popped a new task - execute it inline.
                         NewOrResumedTask::New(task) => {
@@ -373,6 +373,12 @@ impl TaskSystem {
 
                             // Restore the current task.
                             self.set_task(current_task);
+
+                            // We finished the right task / were resumed via other means - break the loop.
+                            // Otherwise keep going.
+                            if yield_data.is_complete() {
+                                break 'wait;
+                            }
                         }
                         // Popped a resumed task - switch to it.
                         // By the time `yield_to_fiber` returns, the dependency will be complete.
@@ -383,7 +389,7 @@ impl TaskSystem {
                                 &yield_data,
                                 main_thread,
                             );
-                            break;
+                            break 'wait;
                         }
                     }
                 }
@@ -391,7 +397,7 @@ impl TaskSystem {
                 // We finished the right task / were resumed via other means - break the loop.
                 // Otherwise keep going.
                 if yield_data.is_complete() {
-                    break;
+                    break 'wait;
                 }
 
                 // TODO - FIXME
@@ -408,8 +414,8 @@ impl TaskSystem {
 
             // (Busy) loop, executing tasks inline until the yield dependency completes.
             // The tasks may not yield.
-            loop {
-                if let Some(task) = self.task_queue.get_task(self.is_main_thread(), false) {
+            'wait_no_fibers: loop {
+                while let Some(task) = self.task_queue.get_task(self.is_main_thread(), false) {
                     match task {
                         // Popped a new task - execute it inline.
                         NewOrResumedTask::New(task) => {
@@ -419,6 +425,12 @@ impl TaskSystem {
 
                             // Take the current task, decrement the task handle(s).
                             self.finish_task(task);
+
+                            // We finished the right task / were resumed via other means - break the loop.
+                            // Otherwise keep going.
+                            if yield_data.is_complete() {
+                                break 'wait_no_fibers;
+                            }
                         }
                         // This may not happen if we're not using fibers.
                         #[cfg(feature = "fibers")]
@@ -431,7 +443,7 @@ impl TaskSystem {
                 // We finished the right task / were resumed via other means - break the loop.
                 // Otherwise keep going.
                 if yield_data.is_complete() {
-                    break;
+                    break 'wait_no_fibers;
                 }
 
                 // TODO - FIXME
